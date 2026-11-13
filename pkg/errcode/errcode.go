@@ -10,8 +10,6 @@
  * @datetime: 2026-11-11 23:30:00 America/Los_Angeles
  *****************************************************************************/
 
-// Package errcode 定义业务错误码。业务层返回 *errcode.Error，
-// 由 response.Fail 统一转换为 HTTP 状态码与响应体。
 package errcode
 
 import (
@@ -38,9 +36,10 @@ func (e *Error) Error() string {
 	return fmt.Sprintf("code=%d message=%s", e.Code, e.Message)
 }
 
-func (e *Error) Unwrap() error { return e.cause }
+func (e *Error) Unwrap() error {
+	return e.cause
+}
 
-// Is 按业务码比较，使 errors.Is(err, errcode.NotFound) 生效。
 func (e *Error) Is(target error) bool {
 	var t *Error
 	if errors.As(target, &t) {
@@ -49,21 +48,18 @@ func (e *Error) Is(target error) bool {
 	return false
 }
 
-// WithMessage 返回替换了提示信息的副本（不修改预定义错误）。
 func (e *Error) WithMessage(format string, args ...any) *Error {
 	cp := *e
 	cp.Message = fmt.Sprintf(format, args...)
 	return &cp
 }
 
-// Wrap 返回附带内部原因的副本。
 func (e *Error) Wrap(cause error) *Error {
 	cp := *e
 	cp.cause = cause
 	return &cp
 }
 
-// From 将任意 error 转为 *Error；无法识别的错误视为 Internal。
 func From(err error) *Error {
 	if err == nil {
 		return nil

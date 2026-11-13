@@ -13,7 +13,9 @@
 package consts
 
 const (
-	RequestTimestamp = "Kylin-Request-Timestamp" // gin.Context key：请求开始时间（time.Time）
-	TraceHeader      = "Kylin-X-Trace-Id"        // 请求 / 响应头：链路 ID
-	TraceKey         = "trace_id"                // gin.Context key / 日志字段：链路 ID
+	RequestTimestamp  = "Kylin-Request-Timestamp" // 请求开始时间（用于计算处理耗时）
+	TraceHeader       = "Kylin-X-Trace-Id"        // 响应头中返回的 Trace ID
+	TraceKey          = "trace_id"                // 上下文中存储的 Trace ID 键
+	EnvConfigPath     = "KYLIN_CONFIG"            // 指定配置文件路径的环境变量
+	DefaultConfigPath = "configs/config.yaml"     // 默认配置文件路径
 )

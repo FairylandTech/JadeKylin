@@ -19,13 +19,8 @@ import (
 	"os"
 
 	"github.com/goccy/go-yaml"
+	"jkylin.com/kylin/v2/pkg/consts"
 )
-
-// EnvConfigPath 指定配置文件路径的环境变量。
-const EnvConfigPath = "KYLIN_CONFIG"
-
-// DefaultConfigPath 默认配置文件路径。
-const DefaultConfigPath = "configs/config.yaml"
 
 type Config struct {
 	App       App       `yaml:"app"`
@@ -70,14 +65,32 @@ type CORS struct {
 // Default 返回默认配置。
 func Default() *Config {
 	return &Config{
-		App: App{Name: "jade-kylin", Mode: "debug", Addr: ":8080", ShutdownTimeout: 10},
-		Log: Log{
-			Level: "info", Format: "console", Output: "stdout",
-			Dir: "logs", Filename: "app.log",
-			MaxSize: 100, MaxBackups: 7, MaxAge: 30, Caller: true,
+		App: App{
+			Name:            "jade-kylin",
+			Mode:            "debug",
+			Addr:            ":8080",
+			ShutdownTimeout: 10,
 		},
-		RateLimit: RateLimit{Enabled: true, RPS: 20, Burst: 40},
-		CORS:      CORS{Enabled: true, AllowOrigins: []string{"*"}},
+		Log: Log{
+			Level:      "debug",
+			Format:     "console",
+			Output:     "stdout",
+			Dir:        "logs",
+			Filename:   "app.log",
+			MaxSize:    100,
+			MaxBackups: 7,
+			MaxAge:     30,
+			Caller:     true,
+		},
+		RateLimit: RateLimit{
+			Enabled: true,
+			RPS:     20,
+			Burst:   40,
+		},
+		CORS: CORS{
+			Enabled:      true,
+			AllowOrigins: []string{"*"},
+		},
 	}
 }
 
@@ -91,13 +104,13 @@ func Get() *Config { return current }
 // 文件不存在时使用默认配置。
 func Load(path string) (*Config, error) {
 	if path == "" {
-		path = os.Getenv(EnvConfigPath)
+		path = os.Getenv(consts.EnvConfigPath)
 	}
 	if path == "" {
-		path = DefaultConfigPath
+		path = consts.DefaultConfigPath
 	}
 
-	cfg := Default()
+	cfg := Get() // 使用默认配置
 	data, err := os.ReadFile(path)
 	switch {
 	case errors.Is(err, fs.ErrNotExist):

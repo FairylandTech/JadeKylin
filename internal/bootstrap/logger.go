@@ -22,7 +22,6 @@ import (
 	"jkylin.com/kylin/v2/pkg/logger"
 )
 
-// InitLogger 根据配置初始化全局日志，并将 gin 的调试输出接入 zap。
 func InitLogger(cfg config.Log) error {
 	err := logger.Init(logger.Options{
 		Level:      cfg.Level,

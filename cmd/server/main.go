@@ -36,31 +36,36 @@ func main() {
 	configPath := flag.String("config", "", "config file path (default: $KYLIN_CONFIG or configs/config.yaml)")
 	flag.Parse()
 
+	// 加载配置文件
 	cfg, err := config.Load(*configPath)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "Error: %v\n", err)
+		_, _ = fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
+	// 初始化日志
 	if err := bootstrap.InitLogger(cfg.Log); err != nil {
-		fmt.Fprintln(os.Stderr, err)
+		_, _ = fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
-	defer func() { _ = logger.Sync() }()
+	defer func() { _ = logger.Sync() }() // 确保日志缓冲区的日志被写入磁盘
 
-	gin.SetMode(cfg.App.Mode)
+	gin.SetMode(cfg.App.Mode) // 设置 gin 模式
 	engine := gin.New()
 	// gin.Context.Value 回退到 Request.Context()，使 logger.FromContext(ginCtx) 同样可用
 	engine.ContextWithFallback = true
 
+	// 初始化中间件和路由
 	middleware.Init(engine, cfg)
 	router.Init(engine)
 
+	// 启动 HTTP 服务
 	srv := &http.Server{
 		Addr:              cfg.App.Addr,
 		Handler:           engine,
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 
+	// 启动服务
 	go func() {
 		logger.Info("server starting", zap.String("name", cfg.App.Name), zap.String("addr", cfg.App.Addr), zap.String("mode", cfg.App.Mode))
 		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
@@ -68,6 +73,7 @@ func main() {
 		}
 	}()
 
+	// 等待中断信号关闭服务器
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	sig := <-quit

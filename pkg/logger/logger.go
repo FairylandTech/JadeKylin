@@ -43,12 +43,13 @@ type Options struct {
 type ctxKey struct{}
 
 var (
-	mu     sync.RWMutex
-	global *zap.Logger
-	sugar  *zap.SugaredLogger
-	level  = zap.NewAtomicLevel()
+	mu     sync.RWMutex           // 保护全局 logger 的读写锁
+	global *zap.Logger            // 全局 logger
+	sugar  *zap.SugaredLogger     // 全局 SugaredLogger
+	level  = zap.NewAtomicLevel() // 全局日志级别
 )
 
+// defaultStr 返回 v 或默认值 def（v 为空字符串时返回 def）。
 func defaultStr(v, def string) string {
 	if strings.TrimSpace(v) == "" {
 		return def
@@ -56,6 +57,7 @@ func defaultStr(v, def string) string {
 	return v
 }
 
+// defaultInt 返回 v 或默认值 def（v 小于等于 0 时返回 def）。
 func defaultInt(v, def int) int {
 	if v <= 0 {
 		return def
@@ -63,6 +65,7 @@ func defaultInt(v, def int) int {
 	return v
 }
 
+// replace 替换全局 logger。
 func replace(l *zap.Logger) {
 	mu.Lock()
 	defer mu.Unlock()
@@ -76,6 +79,7 @@ func init() {
 	replace(l)
 }
 
+// newEncoder 创建日志编码器。
 func newEncoder(format string, color bool) zapcore.Encoder {
 	cfg := zapcore.EncoderConfig{
 		TimeKey:        "time",
@@ -101,7 +105,7 @@ func newEncoder(format string, color bool) zapcore.Encoder {
 	return zapcore.NewConsoleEncoder(cfg)
 }
 
-// SetLevel 运行时动态调整日志级别。
+// SetLevel 设置全局日志级别。
 func SetLevel(l string) error {
 	lvl, err := zapcore.ParseLevel(l)
 	if err != nil {
@@ -111,18 +115,21 @@ func SetLevel(l string) error {
 	return nil
 }
 
+// L 返回全局 logger。
 func L() *zap.Logger {
 	mu.RLock()
 	defer mu.RUnlock()
 	return global
 }
 
+// S 返回全局 SugaredLogger。
 func S() *zap.SugaredLogger {
 	mu.RLock()
 	defer mu.RUnlock()
 	return sugar
 }
 
+// Sync 刷新缓冲区，确保日志写入磁盘。
 func Sync() error {
 	err := L().Sync()
 	if err != nil && (strings.Contains(err.Error(), "invalid argument") ||
@@ -132,10 +139,12 @@ func Sync() error {
 	return err
 }
 
+// NewContext 返回附带 logger 的新 context。
 func NewContext(ctx context.Context, l *zap.Logger) context.Context {
 	return context.WithValue(ctx, ctxKey{}, l)
 }
 
+// FromContext 从 context 中获取 logger；若不存在则返回全局 logger。
 func FromContext(ctx context.Context) *zap.Logger {
 	if ctx != nil {
 		if l, ok := ctx.Value(ctxKey{}).(*zap.Logger); ok && l != nil {
@@ -145,41 +154,40 @@ func FromContext(ctx context.Context) *zap.Logger {
 	return L()
 }
 
-// WithContext 是 FromContext 的别名，便于链式调用：logger.WithContext(ctx).Info(...)
-func WithContext(ctx context.Context) *zap.Logger {
-	return FromContext(ctx)
-}
-
 func Debug(msg string, fields ...zap.Field) {
 	L().WithOptions(zap.AddCallerSkip(1)).Debug(msg, fields...)
 }
+
 func Info(msg string, fields ...zap.Field) {
 	L().WithOptions(zap.AddCallerSkip(1)).Info(msg, fields...)
 }
+
 func Warn(msg string, fields ...zap.Field) {
 	L().WithOptions(zap.AddCallerSkip(1)).Warn(msg, fields...)
 }
+
 func Error(msg string, fields ...zap.Field) {
 	L().WithOptions(zap.AddCallerSkip(1)).Error(msg, fields...)
 }
+
 func Fatal(msg string, fields ...zap.Field) {
 	L().WithOptions(zap.AddCallerSkip(1)).Fatal(msg, fields...)
 }
 
 func Init(opts Options) error {
-	lvl, err := zapcore.ParseLevel(defaultStr(opts.Level, "info"))
+	lvl, err := zapcore.ParseLevel(defaultStr(opts.Level, "info")) // 设置默认日志级别为 info
 	if err != nil {
 		return fmt.Errorf("logger: invalid level %q: %w", opts.Level, err)
 	}
 	level.SetLevel(lvl)
 
-	stackLvl, err := zapcore.ParseLevel(defaultStr(opts.Stacktrace, "error"))
+	stackLvl, err := zapcore.ParseLevel(defaultStr(opts.Stacktrace, "error")) // 设置默认堆栈输出级别为 error
 	if err != nil {
 		return fmt.Errorf("logger: invalid stacktrace level %q: %w", opts.Stacktrace, err)
 	}
 
 	var cores []zapcore.Core
-	output := strings.ToLower(defaultStr(opts.Output, "stdout"))
+	output := strings.ToLower(defaultStr(opts.Output, "stdout")) // 设置默认输出为 stdout
 
 	if output == "stdout" || output == "both" {
 		// 控制台：console 格式下启用彩色级别
@@ -193,9 +201,9 @@ func Init(opts Options) error {
 		}
 		writer := &lumberjack.Logger{
 			Filename:   filepath.Join(dir, defaultStr(opts.Filename, "app.log")),
-			MaxSize:    defaultInt(opts.MaxSize, 100),
-			MaxBackups: defaultInt(opts.MaxBackups, 7),
-			MaxAge:     defaultInt(opts.MaxAge, 30),
+			MaxSize:    defaultInt(opts.MaxSize, 100),  // 日志文件最大 100 MB
+			MaxBackups: defaultInt(opts.MaxBackups, 7), // 最多保留 7 个旧文件
+			MaxAge:     defaultInt(opts.MaxAge, 30),    // 最多保留 30 天
 			Compress:   opts.Compress,
 			LocalTime:  true,
 		}
@@ -207,11 +215,12 @@ func Init(opts Options) error {
 		return fmt.Errorf("logger: invalid output %q, want stdout|file|both", opts.Output)
 	}
 
-	zopts := []zap.Option{zap.AddStacktrace(stackLvl)}
+	zopts := []zap.Option{zap.AddStacktrace(stackLvl)} // 设置堆栈输出级别
 	if opts.Caller {
+		// 设置调用位置输出
 		zopts = append(zopts, zap.AddCaller())
 	}
 
-	replace(zap.New(zapcore.NewTee(cores...), zopts...))
+	replace(zap.New(zapcore.NewTee(cores...), zopts...)) // 替换全局 logger
 	return nil
 }
