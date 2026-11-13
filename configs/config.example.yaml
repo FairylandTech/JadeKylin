@@ -30,7 +30,7 @@ cors:
 
 postgres:
   enabled: false         # 使用 PostgreSQL 时改为 true
-  dsn: ""                # 推荐通过 KYLIN_POSTGRES_DSN 设置，避免提交密码
+  dsn: ""                # 推荐通过 KYLIN_DATABASE_DSN 设置，避免提交密码
   max_conns: 10
   min_conns: 0
   connect_timeout: 5     # 秒，包含启动 Ping 等待时间

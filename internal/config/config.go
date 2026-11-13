@@ -129,7 +129,7 @@ var current = Default()
 // Get 返回当前生效的配置。
 func Get() *Config { return current }
 
-// Load 加载配置：默认值 <- 配置文件。
+// Load 按默认值、配置文件、环境变量的顺序加载配置。
 // path 为空时依次尝试环境变量 KYLIN_CONFIG 和 configs/config.yaml；
 // 文件不存在时使用默认配置。
 func Load(path string) (*Config, error) {
@@ -153,12 +153,16 @@ func Load(path string) (*Config, error) {
 		}
 	}
 
-	if dsn, ok := os.LookupEnv(consts.KylinDatabaseDsn); ok {
-		cfg.Postgres.DSN = dsn
+	if appRunMode, ok := os.LookupEnv(consts.GinMode); ok {
+		cfg.App.Mode = appRunMode
 	}
 
-	if url, ok := os.LookupEnv(consts.KylinRedisURL); ok {
-		cfg.Redis.URL = url
+	if databaseDSN, ok := os.LookupEnv(consts.KylinDatabaseDsn); ok {
+		cfg.Postgres.DSN = databaseDSN
+	}
+
+	if redisUrl, ok := os.LookupEnv(consts.KylinRedisURL); ok {
+		cfg.Redis.URL = redisUrl
 	}
 
 	current = cfg

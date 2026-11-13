@@ -11,9 +11,9 @@ import (
 )
 
 func TestInitPostgresDisabled(t *testing.T) {
-	pool, err := bootstrap.InitPostgres(context.Background(), config.Postgres{})
-	if err != nil || pool != nil {
-		t.Fatalf("disabled: pool=%v err=%v", pool, err)
+	db, closePostgres, err := bootstrap.InitPostgres(context.Background(), config.Postgres{})
+	if err != nil || db != nil || closePostgres != nil {
+		t.Fatalf("disabled: db=%v cleanup provided=%t err=%v", db, closePostgres != nil, err)
 	}
 }
 
@@ -33,9 +33,9 @@ func TestInitPostgresValidation(t *testing.T) {
 			case "malformed dsn":
 				cfg.DSN = "postgres://user:secret@localhost:bad/test"
 			}
-			pool, err := bootstrap.InitPostgres(context.Background(), cfg)
-			if err == nil || pool != nil {
-				t.Fatalf("expected validation error, pool=%v err=%v", pool, err)
+			db, closePostgres, err := bootstrap.InitPostgres(context.Background(), cfg)
+			if err == nil || db != nil || closePostgres != nil {
+				t.Fatalf("expected validation error, db=%v cleanup provided=%t err=%v", db, closePostgres != nil, err)
 			}
 			if strings.Contains(err.Error(), "secret") {
 				t.Fatal("error exposed password")
@@ -52,13 +52,13 @@ func TestInitPostgresIntegration(t *testing.T) {
 	}
 	cfg := config.Default().Postgres
 	cfg.Enabled, cfg.DSN = true, dsn
-	pool, err := bootstrap.InitPostgres(context.Background(), cfg)
+	db, closePostgres, err := bootstrap.InitPostgres(context.Background(), cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer pool.Close()
+	defer closePostgres()
 	var result int
-	if err := pool.QueryRow(context.Background(), "SELECT 1").Scan(&result); err != nil {
+	if err := db.WithContext(context.Background()).Raw("SELECT 1").Scan(&result).Error; err != nil {
 		t.Fatal(err)
 	}
 	if result != 1 {

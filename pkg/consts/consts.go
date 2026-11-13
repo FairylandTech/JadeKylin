@@ -13,8 +13,10 @@
 package consts
 
 const (
-	KylinDatabaseDsn = "KYLIN_DATABASE_DSN"
-	KylinRedisURL    = "KYLIN_REDIS_URL"
+	GinMode             = "GIN_MODE"
+	KylinDatabaseDsn    = "KYLIN_DATABASE_DSN"
+	KylinRedisURL       = "KYLIN_REDIS_URL"
+	KylinUserAdminToken = "KYLIN_USER_ADMIN_TOKEN"
 
 	RequestTimestamp  = "Kylin-Request-Timestamp" // 请求开始时间（用于计算处理耗时）
 	TraceHeader       = "Kylin-X-Trace-Id"        // 响应头中返回的 Trace ID

@@ -15,7 +15,7 @@ func TestLoadPostgres(t *testing.T) {
 	if err := os.WriteFile(path, []byte("postgres:\n  enabled: true\n  dsn: postgres://localhost/from-file\n  max_conns: 20\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("KYLIN_POSTGRES_DSN", "postgres://localhost/from-env")
+	t.Setenv("KYLIN_DATABASE_DSN", "postgres://localhost/from-env")
 	cfg, err := config.Load(path)
 	if err != nil {
 		t.Fatal(err)
@@ -29,5 +29,15 @@ func TestLoadPostgres(t *testing.T) {
 	}
 	if cfg.Postgres.Enabled || cfg.Postgres.MaxConns != 10 {
 		t.Fatalf("previous config leaked into defaults: %+v", cfg.Postgres)
+	}
+	if err := os.Unsetenv("KYLIN_DATABASE_DSN"); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err = config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Postgres.DSN != "postgres://localhost/from-file" {
+		t.Fatal("PostgreSQL DSN was not loaded from the config file")
 	}
 }

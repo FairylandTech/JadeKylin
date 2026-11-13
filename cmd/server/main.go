@@ -17,6 +17,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -30,6 +31,7 @@ import (
 	"jkylin.com/kylin/v2/internal/config"
 	"jkylin.com/kylin/v2/internal/middleware"
 	"jkylin.com/kylin/v2/internal/router"
+	"jkylin.com/kylin/v2/pkg/consts"
 	"jkylin.com/kylin/v2/pkg/logger"
 )
 
@@ -39,84 +41,119 @@ func main() {
 	configPath := flag.String("config", "", "config file path (default: $KYLIN_CONFIG or configs/config.yaml)")
 	flag.Parse()
 
-	// 加载配置文件
-	cfg, err := config.Load(*configPath)
+	err := run(*configPath)
 	if err != nil {
-		_, _ = fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		logger.Error("Application failed", zap.Error(err))
+	}
+	_ = logger.Sync()
+	if err != nil {
 		os.Exit(1)
 	}
-	// 初始化日志
-	if err := bootstrap.InitLogger(cfg.Log); err != nil {
-		_, _ = fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-		os.Exit(1)
-	}
-	defer func() { _ = logger.Sync() }() // 确保日志缓冲区的日志被写入磁盘
+}
 
-	// Postgres
-	pool, err := bootstrap.InitPostgres(context.Background(), cfg.Postgres)
+func run(configPath string) error {
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+
+	// Load config
+	cfg, err := config.Load(configPath)
 	if err != nil {
-		logger.Error("postgres initialization failed", zap.Error(err))
-		os.Exit(1)
+		return fmt.Errorf("load configuration: %w", err)
 	}
-	if pool != nil {
-		defer pool.Close()
-		logger.Info("postgres connected")
+
+	// Logger
+	if err := bootstrap.InitLogger(cfg.Log); err != nil {
+		return fmt.Errorf("initialize logger: %w", err)
+	}
+
+	// Database
+	postgresDB, closePostgres, err := bootstrap.InitPostgres(ctx, cfg.Postgres)
+	if err != nil {
+		if ctx.Err() != nil && errors.Is(err, context.Canceled) {
+			return nil
+		}
+		return fmt.Errorf("initialize PostgreSQL: %w", err)
+	}
+	if closePostgres != nil {
+		defer closePostgres()
+		logger.Info("PostgreSQL connected")
 	}
 
 	// Redis
-	redisClient, err := bootstrap.InitRedis(context.Background(), cfg.Redis)
+	redisClient, err := bootstrap.InitRedis(ctx, cfg.Redis)
 	if err != nil {
-		logger.Error("redis initialization failed", zap.Error(err))
-		if pool != nil {
-			pool.Close()
+		if ctx.Err() != nil && errors.Is(err, context.Canceled) {
+			return nil
 		}
-		_ = logger.Sync()
-		os.Exit(1)
+		return fmt.Errorf("initialize Redis: %w", err)
 	}
 	if redisClient != nil {
 		defer func() {
 			if err := redisClient.Close(); err != nil {
-				logger.Error("redis close failed", zap.Error(err))
+				logger.Error("Redis close failed", zap.Error(err))
 			}
 		}()
-		logger.Info("redis connected")
+		logger.Info("Redis connected")
 	}
 
-	gin.SetMode(cfg.App.Mode) // 设置 gin 模式
+	logger.S().Infof("Application runner mode: %s", cfg.App.Mode)
+	gin.SetMode(cfg.App.Mode)
 	engine := gin.New()
 	// gin.Context.Value 回退到 Request.Context()，使 logger.FromContext(ginCtx) 同样可用
 	engine.ContextWithFallback = true
 
-	// 初始化中间件和路由
 	middleware.Init(engine, cfg)
-	router.Init(engine)
+	router.Init(engine, postgresDB, os.Getenv(consts.KylinUserAdminToken))
 
-	// 启动 HTTP 服务
-	srv := &http.Server{
+	server := &http.Server{
 		Addr:              cfg.App.Addr,
 		Handler:           engine,
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 
-	// 启动服务
-	go func() {
-		logger.Info("server starting", zap.String("name", cfg.App.Name), zap.String("addr", cfg.App.Addr), zap.String("mode", cfg.App.Mode))
-		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			logger.Fatal("server listen failed", zap.Error(err))
+	addr := server.Addr
+	if addr == "" {
+		addr = ":http"
+	}
+	if ctx.Err() != nil {
+		return nil
+	}
+	var listenConfig net.ListenConfig
+	listener, err := listenConfig.Listen(ctx, "tcp", addr)
+	if err != nil {
+		if ctx.Err() != nil && errors.Is(err, context.Canceled) {
+			return nil
 		}
+		return fmt.Errorf("listen on %q: %w", addr, err)
+	}
+	defer func() { _ = server.Close() }()
+	logger.Info(fmt.Sprintf("Application HTTP server listening: %s", listener.Addr().String()),
+		zap.String("name", cfg.App.Name),
+		zap.String("addr", listener.Addr().String()),
+		zap.String("mode", cfg.App.Mode),
+	)
+
+	serveDone := make(chan error, 1)
+	go func() {
+		serveDone <- server.Serve(listener)
 	}()
 
-	// 等待中断信号关闭服务器
-	quit := make(chan os.Signal, 1)
-	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
-	sig := <-quit
-	logger.Info("shutting down server", zap.String("signal", sig.String()))
-
-	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(cfg.App.ShutdownTimeout)*time.Second)
-	defer cancel()
-	if err := srv.Shutdown(ctx); err != nil {
-		logger.Error("server forced to shutdown", zap.Error(err))
-		return
+	select {
+	case err := <-serveDone:
+		return fmt.Errorf("serve HTTP: %w", err)
+	case <-ctx.Done():
+		stop()
 	}
-	logger.Info("server exited")
+
+	logger.Info("Shutting down HTTP server")
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), time.Duration(cfg.App.ShutdownTimeout)*time.Second)
+	defer cancel()
+	if err := server.Shutdown(shutdownCtx); err != nil {
+		return fmt.Errorf("graceful HTTP shutdown: %w", err)
+	}
+	if err := <-serveDone; !errors.Is(err, http.ErrServerClosed) {
+		return fmt.Errorf("serve HTTP: %w", err)
+	}
+	logger.Info("HTTP server stopped")
+	return nil
 }

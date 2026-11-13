@@ -16,12 +16,17 @@ import (
 	"net/http"
 
 	"github.com/gin-gonic/gin"
-	"jkylin.com/kylin/v2/internal/router/example"
+	"gorm.io/gorm"
+	"jkylin.com/kylin/v2/internal/router/user"
+	"jkylin.com/kylin/v2/pkg/response"
 )
 
-func Init(engine *gin.Engine) {
+func Init(engine *gin.Engine, db *gorm.DB, userAdminToken string) {
 	// 健康检查（已在访问日志中跳过）
 	engine.GET("/healthz", func(ctx *gin.Context) { ctx.String(http.StatusOK, "ok") })
 
-	example.Router(engine)
+	engine.GET("/example", func(ctx *gin.Context) {
+		response.Success(ctx, gin.H{"example": "Hello Gin Server."})
+	})
+	user.Router(engine, db, userAdminToken)
 }
