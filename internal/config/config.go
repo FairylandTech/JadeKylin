@@ -22,13 +22,6 @@ import (
 	"jkylin.com/kylin/v2/pkg/consts"
 )
 
-type Config struct {
-	App       App       `yaml:"app"`
-	Log       Log       `yaml:"log"`
-	RateLimit RateLimit `yaml:"rate_limit"`
-	CORS      CORS      `yaml:"cors"`
-}
-
 type App struct {
 	Name            string `yaml:"name"`
 	Mode            string `yaml:"mode"` // debug | release | test
@@ -62,9 +55,46 @@ type CORS struct {
 	AllowOrigins []string `yaml:"allow_origins"`
 }
 
+type Postgres struct {
+	Enabled         bool   `yaml:"enabled"`
+	DSN             string `yaml:"dsn"`
+	MaxConns        int32  `yaml:"max_conns"`
+	MinConns        int32  `yaml:"min_conns"`
+	ConnectTimeout  int    `yaml:"connect_timeout"`
+	MaxConnLifetime int    `yaml:"max_conn_lifetime"`
+	MaxConnIdleTime int    `yaml:"max_conn_idle_time"`
+}
+
+type Redis struct {
+	Enabled        bool   `yaml:"enabled"`
+	URL            string `yaml:"url"`
+	PoolSize       int    `yaml:"pool_size"`
+	MinIdleConns   int    `yaml:"min_idle_conns"`
+	ConnectTimeout int    `yaml:"connect_timeout"` // 秒，包含启动 Ping
+	ReadTimeout    int    `yaml:"read_timeout"`    // 秒
+	WriteTimeout   int    `yaml:"write_timeout"`   // 秒
+}
+
+type Config struct {
+	Redis     Redis     `yaml:"redis"`
+	App       App       `yaml:"app"`
+	Log       Log       `yaml:"log"`
+	RateLimit RateLimit `yaml:"rate_limit"`
+	CORS      CORS      `yaml:"cors"`
+	Postgres  Postgres  `yaml:"postgres"`
+}
+
 // Default 返回默认配置。
 func Default() *Config {
 	return &Config{
+		Redis: Redis{URL: "redis://localhost:6379/0", PoolSize: 10, ConnectTimeout: 5, ReadTimeout: 3, WriteTimeout: 3},
+		Postgres: Postgres{
+			MaxConns:        10,
+			MinConns:        0,
+			ConnectTimeout:  5,
+			MaxConnLifetime: 3600,
+			MaxConnIdleTime: 300,
+		},
 		App: App{
 			Name:            "jade-kylin",
 			Mode:            "debug",
@@ -110,7 +140,7 @@ func Load(path string) (*Config, error) {
 		path = consts.DefaultConfigPath
 	}
 
-	cfg := Get() // 使用默认配置
+	cfg := Default() // 每次加载都从默认配置开始
 	data, err := os.ReadFile(path)
 	switch {
 	case errors.Is(err, fs.ErrNotExist):
@@ -121,6 +151,14 @@ func Load(path string) (*Config, error) {
 		if err := yaml.Unmarshal(data, cfg); err != nil {
 			return nil, fmt.Errorf("config: parse %s: %w", path, err)
 		}
+	}
+
+	if dsn, ok := os.LookupEnv(consts.KylinDatabaseDsn); ok {
+		cfg.Postgres.DSN = dsn
+	}
+
+	if url, ok := os.LookupEnv(consts.KylinRedisURL); ok {
+		cfg.Redis.URL = url
 	}
 
 	current = cfg

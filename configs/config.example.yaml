@@ -27,3 +27,21 @@ cors:
   enabled: true
   allow_origins:
     - "*"
+
+postgres:
+  enabled: false         # 使用 PostgreSQL 时改为 true
+  dsn: ""                # 推荐通过 KYLIN_POSTGRES_DSN 设置，避免提交密码
+  max_conns: 10
+  min_conns: 0
+  connect_timeout: 5     # 秒，包含启动 Ping 等待时间
+  max_conn_lifetime: 3600 # 秒
+  max_conn_idle_time: 300 # 秒
+
+redis:
+  enabled: false
+  url: "redis://localhost:6379/0" # 认证使用 KYLIN_REDIS_URL=redis://user:password@host:6379/0；TLS 使用 rediss://
+  pool_size: 10
+  min_idle_conns: 0
+  connect_timeout: 5 # 秒，包含启动 Ping
+  read_timeout: 3    # 秒
+  write_timeout: 3   # 秒

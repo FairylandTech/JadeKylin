@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/joho/godotenv"
 	"go.uber.org/zap"
 	"jkylin.com/kylin/v2/internal/bootstrap"
 	"jkylin.com/kylin/v2/internal/config"
@@ -33,6 +34,8 @@ import (
 )
 
 func main() {
+	_ = godotenv.Load()
+
 	configPath := flag.String("config", "", "config file path (default: $KYLIN_CONFIG or configs/config.yaml)")
 	flag.Parse()
 
@@ -48,6 +51,36 @@ func main() {
 		os.Exit(1)
 	}
 	defer func() { _ = logger.Sync() }() // 确保日志缓冲区的日志被写入磁盘
+
+	// Postgres
+	pool, err := bootstrap.InitPostgres(context.Background(), cfg.Postgres)
+	if err != nil {
+		logger.Error("postgres initialization failed", zap.Error(err))
+		os.Exit(1)
+	}
+	if pool != nil {
+		defer pool.Close()
+		logger.Info("postgres connected")
+	}
+
+	// Redis
+	redisClient, err := bootstrap.InitRedis(context.Background(), cfg.Redis)
+	if err != nil {
+		logger.Error("redis initialization failed", zap.Error(err))
+		if pool != nil {
+			pool.Close()
+		}
+		_ = logger.Sync()
+		os.Exit(1)
+	}
+	if redisClient != nil {
+		defer func() {
+			if err := redisClient.Close(); err != nil {
+				logger.Error("redis close failed", zap.Error(err))
+			}
+		}()
+		logger.Info("redis connected")
+	}
 
 	gin.SetMode(cfg.App.Mode) // 设置 gin 模式
 	engine := gin.New()
