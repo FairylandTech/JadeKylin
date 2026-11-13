@@ -74,11 +74,6 @@ func replace(l *zap.Logger) {
 	zap.ReplaceGlobals(l)
 }
 
-func init() {
-	l, _ := zap.NewDevelopment()
-	replace(l)
-}
-
 // newEncoder 创建日志编码器。
 func newEncoder(format string, color bool) zapcore.Encoder {
 	cfg := zapcore.EncoderConfig{
@@ -172,6 +167,11 @@ func Error(msg string, fields ...zap.Field) {
 
 func Fatal(msg string, fields ...zap.Field) {
 	L().WithOptions(zap.AddCallerSkip(1)).Fatal(msg, fields...)
+}
+
+func init() {
+	log, _ := zap.NewDevelopment()
+	replace(log)
 }
 
 func Init(opts Options) error {

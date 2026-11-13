@@ -23,7 +23,7 @@ import (
 	"jkylin.com/kylin/v2/pkg/logger"
 )
 
-func (m *GlobalMiddleware) Trace() gin.HandlerFunc {
+func (m *Middleware) Trace() gin.HandlerFunc {
 	return func(ctx *gin.Context) {
 		traceID := ctx.GetHeader(consts.TraceHeader)
 		if !validTraceID(traceID) {
@@ -34,8 +34,10 @@ func (m *GlobalMiddleware) Trace() gin.HandlerFunc {
 		ctx.Set(consts.RequestTimestamp, time.Now())
 		ctx.Header(consts.TraceHeader, traceID)
 
-		l := logger.L().With(zap.String(consts.TraceKey, traceID))
-		ctx.Request = ctx.Request.WithContext(logger.NewContext(ctx.Request.Context(), l))
+		// 创建一个带有 trace_id 的日志对象
+		log := logger.L().With(zap.String(consts.TraceKey, traceID))
+		// 将日志对象添加到请求上下文中
+		ctx.Request = ctx.Request.WithContext(logger.NewContext(ctx.Request.Context(), log))
 
 		ctx.Next()
 	}

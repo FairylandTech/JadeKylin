@@ -21,7 +21,7 @@ import (
 )
 
 // CORS 跨域处理。allow_origins 包含 "*" 时允许任意来源。
-func (m *GlobalMiddleware) CORS() gin.HandlerFunc {
+func (m *Middleware) CORS() gin.HandlerFunc {
 	allowAll := false
 	allowed := make(map[string]struct{}, len(m.cfg.CORS.AllowOrigins))
 	for _, o := range m.cfg.CORS.AllowOrigins {

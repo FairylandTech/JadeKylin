@@ -22,8 +22,8 @@ import (
 )
 
 // AccessLog 访问日志：请求结束后按状态码分级输出（5xx=error, 4xx=warn, 其它=info）。
-// 依赖 Trace 中间件注入的 Logger，因此需注册在 Trace 之后。
-func (m *GlobalMiddleware) AccessLog() gin.HandlerFunc {
+// 依赖 Trace 中间件注入的 Logger
+func (m *Middleware) AccessLog() gin.HandlerFunc {
 	skip := make(map[string]struct{}, len(m.cfg.Log.SkipPaths))
 	for _, p := range m.cfg.Log.SkipPaths {
 		skip[p] = struct{}{}

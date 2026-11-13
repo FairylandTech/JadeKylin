@@ -28,7 +28,7 @@ import (
 )
 
 // Recovery 捕获 panic，记录堆栈并返回统一 500 响应。
-func (m *GlobalMiddleware) Recovery() gin.HandlerFunc {
+func (m *Middleware) Recovery() gin.HandlerFunc {
 	return func(ctx *gin.Context) {
 		defer func() {
 			rec := recover()

@@ -106,6 +106,7 @@ func (rl *RateLimitMiddleware) Handler() gin.HandlerFunc {
 }
 
 // RateLimit 按配置创建限流中间件。
-func (m *GlobalMiddleware) RateLimit() gin.HandlerFunc {
+// TODO: 后期按需优化。
+func (m *Middleware) RateLimit() gin.HandlerFunc {
 	return NewRateLimit(m.cfg.RateLimit.RPS, m.cfg.RateLimit.Burst).Handler()
 }

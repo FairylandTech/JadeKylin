@@ -17,13 +17,13 @@ import (
 	"jkylin.com/kylin/v2/internal/config"
 )
 
-type GlobalMiddleware struct {
+type Middleware struct {
 	cfg *config.Config
 }
 
-func New(cfg *config.Config) *GlobalMiddleware {
+func NewGlobalMiddleware(cfg *config.Config) *Middleware {
 	if cfg == nil {
 		cfg = config.Default()
 	}
-	return &GlobalMiddleware{cfg: cfg}
+	return &Middleware{cfg: cfg}
 }
