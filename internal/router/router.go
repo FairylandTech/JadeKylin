@@ -16,6 +16,8 @@ import (
 	"net/http"
 
 	"github.com/gin-gonic/gin"
+	swaggerFiles "github.com/swaggo/files"
+	ginSwagger "github.com/swaggo/gin-swagger"
 	"gorm.io/gorm"
 	"jkylin.com/kylin/v2/internal/router/user"
 	"jkylin.com/kylin/v2/pkg/response"
@@ -28,5 +30,8 @@ func Init(engine *gin.Engine, db *gorm.DB, userAdminToken string) {
 	engine.GET("/example", func(ctx *gin.Context) {
 		response.Success(ctx, gin.H{"example": "Hello Gin Server."})
 	})
+
+	engine.GET("/swagger/*any", ginSwagger.WrapHandler(swaggerFiles.Handler))
+
 	user.Router(engine, db, userAdminToken)
 }

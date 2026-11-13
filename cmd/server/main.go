@@ -35,22 +35,6 @@ import (
 	"jkylin.com/kylin/v2/pkg/logger"
 )
 
-func main() {
-	_ = godotenv.Load()
-
-	configPath := flag.String("config", "", "config file path (default: $KYLIN_CONFIG or configs/config.yaml)")
-	flag.Parse()
-
-	err := run(*configPath)
-	if err != nil {
-		logger.Error("Application failed", zap.Error(err))
-	}
-	_ = logger.Sync()
-	if err != nil {
-		os.Exit(1)
-	}
-}
-
 func run(configPath string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
@@ -67,15 +51,15 @@ func run(configPath string) error {
 	}
 
 	// Database
-	postgresDB, closePostgres, err := bootstrap.InitPostgres(ctx, cfg.Postgres)
+	postgresql, closePostgresql, err := bootstrap.InitPostgres(ctx, cfg.Postgres)
 	if err != nil {
 		if ctx.Err() != nil && errors.Is(err, context.Canceled) {
 			return nil
 		}
 		return fmt.Errorf("initialize PostgreSQL: %w", err)
 	}
-	if closePostgres != nil {
-		defer closePostgres()
+	if closePostgresql != nil {
+		defer closePostgresql()
 		logger.Info("PostgreSQL connected")
 	}
 
@@ -103,7 +87,7 @@ func run(configPath string) error {
 	engine.ContextWithFallback = true
 
 	middleware.Init(engine, cfg)
-	router.Init(engine, postgresDB, os.Getenv(consts.KylinUserAdminToken))
+	router.Init(engine, postgresql, os.Getenv(consts.KylinUserAdminToken))
 
 	server := &http.Server{
 		Addr:              cfg.App.Addr,
@@ -156,4 +140,25 @@ func run(configPath string) error {
 	}
 	logger.Info("HTTP server stopped")
 	return nil
+}
+
+// @title           JadeKylin API
+// @version         1.0
+// @description     JadeKylin 服务接口文档
+// @host            localhost:8080
+// @BasePath        /api/v1
+func main() {
+	_ = godotenv.Load()
+
+	configPath := flag.String("config", "", "config file path (default: $KYLIN_CONFIG or configs/config.yaml)")
+	flag.Parse()
+
+	err := run(*configPath)
+	if err != nil {
+		logger.Error("Application failed", zap.Error(err))
+	}
+	_ = logger.Sync()
+	if err != nil {
+		os.Exit(1)
+	}
 }
