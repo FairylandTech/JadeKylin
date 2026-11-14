@@ -12,19 +12,18 @@ import (
 	"github.com/gin-gonic/gin"
 	"jkylin.com/kylin/v2/internal/contracts/requests"
 	"jkylin.com/kylin/v2/internal/pkg/support"
-	user2 "jkylin.com/kylin/v2/internal/service"
+	"jkylin.com/kylin/v2/internal/service"
 )
 
 type UserHandler struct {
 	support.HandlerSupportBase
-	userService *user2.UserService
+	userService *service.UserService
 }
 
-func NewUserHandler(userService *user2.UserService) *UserHandler {
+func NewUserHandler(userService *service.UserService) *UserHandler {
 	return &UserHandler{userService: userService}
 }
 
-// Create POST /users
 func (handler *UserHandler) Create(ctx *gin.Context) {
 	var requestBody requests.CreateRequest
 	if err := handler.BindJSON(ctx, &requestBody); err != nil {
@@ -39,7 +38,6 @@ func (handler *UserHandler) Create(ctx *gin.Context) {
 	handler.Success(ctx, record)
 }
 
-// Get GET /users/:id
 func (handler *UserHandler) Get(ctx *gin.Context) {
 	var uri requests.URI
 	if err := handler.BindURI(ctx, &uri); err != nil {
@@ -54,7 +52,6 @@ func (handler *UserHandler) Get(ctx *gin.Context) {
 	handler.Success(ctx, record)
 }
 
-// List GET /users?page=1&size=10&keyword=xx
 func (handler *UserHandler) List(ctx *gin.Context) {
 	var q requests.ListQuery
 	if err := handler.BindQuery(ctx, &q); err != nil {
@@ -69,7 +66,6 @@ func (handler *UserHandler) List(ctx *gin.Context) {
 	handler.Page(ctx, list, q.Page, q.Size, total)
 }
 
-// Update PUT /users/:id
 func (handler *UserHandler) Update(ctx *gin.Context) {
 	var uri requests.URI
 	if err := handler.BindURI(ctx, &uri); err != nil {
@@ -89,7 +85,6 @@ func (handler *UserHandler) Update(ctx *gin.Context) {
 	handler.Success(ctx, record)
 }
 
-// Delete DELETE /users/:id
 func (handler *UserHandler) Delete(ctx *gin.Context) {
 	var uri requests.URI
 	if err := handler.BindURI(ctx, &uri); err != nil {

@@ -39,7 +39,7 @@ postgres:
 
 redis:
   enabled: false
-  url: "redis://localhost:6379/0" # 认证使用 KYLIN_REDIS_URL=redis://user:password@host:6379/0；TLS 使用 rediss://
+  url: "redis://localhost:6379/0" # 认证使用 KYLIN_REDIS_URL=redis://users:password@host:6379/0；TLS 使用 rediss://
   pool_size: 10
   min_idle_conns: 0
   connect_timeout: 5 # 秒，包含启动 Ping

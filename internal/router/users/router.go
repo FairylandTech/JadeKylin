@@ -1,4 +1,4 @@
-package user
+package users
 
 import (
 	"crypto/sha256"
@@ -14,7 +14,6 @@ import (
 	"jkylin.com/kylin/v2/pkg/response"
 )
 
-// Router 注册由管理令牌保护的用户管理接口。
 func Router(engine *gin.Engine, db *gorm.DB, adminToken string) {
 	if db == nil || strings.TrimSpace(adminToken) == "" {
 		return
@@ -29,6 +28,7 @@ func Router(engine *gin.Engine, db *gorm.DB, adminToken string) {
 			response.AbortSilently(ctx, errcode.Unauthorized)
 		}
 	})
+
 	userHandler := handler.NewUserHandler(service.NewUserService(repository.NewUserRepository(db)))
 	users.POST("", userHandler.Create)
 	users.GET("", userHandler.List)

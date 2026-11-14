@@ -24,7 +24,7 @@ func TestInitRedisValidation(t *testing.T) {
 			cfg.Enabled = true
 			switch name {
 			case "url":
-				cfg.URL = "redis://user:secret@localhost:bad/0"
+				cfg.URL = "redis://users:secret@localhost:bad/0"
 			case "pool":
 				cfg.PoolSize = 0
 			case "timeout":

@@ -6,6 +6,7 @@ package requests
 
 import (
 	"jkylin.com/kylin/v2/internal/model"
+	"jkylin.com/kylin/v2/internal/pkg/support"
 )
 
 type CreateRequest struct {
@@ -30,7 +31,7 @@ type UpdateRequest struct {
 }
 
 type ListQuery struct {
-	model.PageQuery
+	support.PageQuery
 	Keyword string `form:"keyword" binding:"max=128"`
 }
 

@@ -31,7 +31,7 @@ func TestInitPostgresValidation(t *testing.T) {
 			case "invalid timeout":
 				cfg.ConnectTimeout = 0
 			case "malformed dsn":
-				cfg.DSN = "postgres://user:secret@localhost:bad/test"
+				cfg.DSN = "postgres://users:secret@localhost:bad/test"
 			}
 			db, closePostgres, err := bootstrap.InitPostgres(context.Background(), cfg)
 			if err == nil || db != nil || closePostgres != nil {

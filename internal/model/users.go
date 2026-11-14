@@ -2,16 +2,12 @@
  * Copyright (c) 2026 Beau Dean. All rights reserved.
  ******************************************************************************/
 
-/*******************************************************************************
- * Copyright (c) 2026 Beau Dean. All rights reserved.
- ******************************************************************************/
-
 /******************************************************************************
  * @software: GoLand
  * @author: Beau Dean (Hean)
  * @contact: https://github.com/FairylandTech
  * @organization: https://github.com/FairylandFuture
- * @datetime: 2026-11-13 13:34:03 America/Los_Angeles
+ * @datetime: 2026-11-14 07:53:51 America/Los_Angeles
  *****************************************************************************/
 
 package model

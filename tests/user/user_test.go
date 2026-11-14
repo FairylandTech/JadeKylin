@@ -129,7 +129,7 @@ func verifyCRUD(t *testing.T, db *gorm.DB, migration string) {
 	if created.ID <= 0 || created.Username != "Alice" || created.Version != 1 || created.Status != "Y" ||
 		created.Enabled != "Y" || created.Roles == nil || len(*created.Roles) != 2 ||
 		(*created.Roles)[1] != "role,with,commas" || created.CreatedAt.IsZero() || created.UpdatedAt.IsZero() {
-		t.Fatalf("unexpected user: %+v", created)
+		t.Fatalf("unexpected users: %+v", created)
 	}
 	path := "/users/" + strconv.FormatInt(created.ID, 10)
 	call(http.MethodPost, "/users", payload, http.StatusConflict)
@@ -141,6 +141,16 @@ func verifyCRUD(t *testing.T, db *gorm.DB, migration string) {
 		t.Fatal(err)
 	}
 	call(http.MethodGet, path, "", http.StatusOK)
+	defaultPage := decodeData[struct {
+		Page  int          `json:"page"`
+		Size  int          `json:"size"`
+		Total int64        `json:"total"`
+		Pages int          `json:"pages"`
+		Data  []model.User `json:"data"`
+	}](t, call(http.MethodGet, "/users", "", http.StatusOK))
+	if defaultPage.Page != 1 || defaultPage.Size != 10 || defaultPage.Total != 2 || defaultPage.Pages != 1 || len(defaultPage.Data) != 2 {
+		t.Fatalf("unexpected default page: %+v", defaultPage)
+	}
 	for _, keyword := range []string{"ali", "AMP"} {
 		list := decodeData[struct {
 			Data  []model.User `json:"data"`
@@ -152,10 +162,10 @@ func verifyCRUD(t *testing.T, db *gorm.DB, migration string) {
 	}
 	call(http.MethodPut, path, `{"username":"Bob","version":1}`, http.StatusConflict)
 	updated := decodeData[model.User](t, call(http.MethodPut, path,
-		`{"password":"new-password","nickname":"","roles":[],"version":1}`, http.StatusOK))
-	if updated.Version != 2 || updated.Nickname != "" || updated.Roles == nil || len(*updated.Roles) != 0 ||
+		`{"password":"new-password","nickname":"Updated Example","roles":[],"version":1}`, http.StatusOK))
+	if updated.Version != 2 || updated.Nickname != "Updated Example" || updated.Roles == nil || len(*updated.Roles) != 0 ||
 		!updated.UpdatedAt.After(created.UpdatedAt) {
-		t.Fatalf("unexpected updated user: %+v", updated)
+		t.Fatalf("unexpected updated users: %+v", updated)
 	}
 	call(http.MethodPut, path, `{"remark":"stale","version":1}`, http.StatusConflict)
 	var stored model.User
@@ -166,9 +176,34 @@ func verifyCRUD(t *testing.T, db *gorm.DB, migration string) {
 		t.Fatal("updated password was not stored as a bcrypt hash")
 	}
 	call(http.MethodDelete, path, "", http.StatusOK)
+	var deleted model.User
+	if err := db.First(&deleted, created.ID).Error; err != nil {
+		t.Fatalf("deleted user should remain in the database: %v", err)
+	}
+	if deleted.Enabled != "N" || deleted.Version != updated.Version+1 || !deleted.UpdatedAt.After(updated.UpdatedAt) {
+		t.Fatalf("unexpected soft-deleted user state: enabled=%q version=%d updated_at=%v", deleted.Enabled, deleted.Version, deleted.UpdatedAt)
+	}
+	for _, tc := range []struct {
+		path  string
+		total int64
+	}{
+		{path: "/users", total: 1},
+		{path: "/users?keyword=alice", total: 0},
+		{path: "/users?keyword=example", total: 0},
+	} {
+		list := decodeData[struct {
+			Data  []model.User `json:"data"`
+			Total int64        `json:"total"`
+		}](t, call(http.MethodGet, tc.path, "", http.StatusOK))
+		if list.Total != tc.total || len(list.Data) != int(tc.total) || (tc.total == 1 && list.Data[0].ID != second.ID) {
+			t.Fatalf("unexpected page after soft delete for %s: %+v", tc.path, list)
+		}
+	}
 	call(http.MethodGet, path, "", http.StatusNotFound)
 	call(http.MethodPut, path, `{"remark":"missing","version":2}`, http.StatusNotFound)
+	call(http.MethodPut, path, `{"enabled":"Y"}`, http.StatusNotFound)
 	call(http.MethodDelete, path, "", http.StatusNotFound)
+	call(http.MethodPost, "/users", payload, http.StatusConflict)
 }
 
 func request(engine http.Handler, method, path, header, body string) *httptest.ResponseRecorder {

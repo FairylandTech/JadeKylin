@@ -2,9 +2,13 @@
  * Copyright (c) 2026 Beau Dean. All rights reserved.
  ******************************************************************************/
 
-/*******************************************************************************
- * Copyright (c) 2026 Beau Dean. All rights reserved.
- ******************************************************************************/
+/******************************************************************************
+ * @software: GoLand
+ * @author: Beau Dean (Hean)
+ * @contact: https://github.com/FairylandTech
+ * @organization: https://github.com/FairylandFuture
+ * @datetime: 2026-11-14 07:53:20 America/Los_Angeles
+ *****************************************************************************/
 
 package repository
 
@@ -32,22 +36,27 @@ func NewUserRepository(db *gorm.DB) *UserRepository {
 	return &UserRepository{db: db}
 }
 
-func (r *UserRepository) Create(ctx context.Context, record *model.User) error {
-	return userDBError(r.db.WithContext(ctx).Create(record).Error)
+func (userRepository *UserRepository) enabledUsers(ctx context.Context) *gorm.DB {
+	return userRepository.db.WithContext(ctx).Where("enabled = ?", "Y")
 }
 
-func (r *UserRepository) Get(ctx context.Context, id int64) (*model.User, error) {
+func (userRepository *UserRepository) Create(ctx context.Context, record *model.User) error {
+	return userDBError(userRepository.db.WithContext(ctx).Create(record).Error)
+}
+
+func (userRepository *UserRepository) Get(ctx context.Context, id int64) (*model.User, error) {
 	var record model.User
-	if err := r.db.WithContext(ctx).Omit("password").First(&record, id).Error; err != nil {
+	if err := userRepository.enabledUsers(ctx).Omit("password").First(&record, id).Error; err != nil {
 		return nil, userDBError(err)
 	}
 	return &record, nil
 }
 
-func (r *UserRepository) List(ctx context.Context, keyword string, offset, limit int) ([]model.User, int64, error) {
-	query := r.db.WithContext(ctx).Model(&model.User{})
+func (userRepository *UserRepository) List(ctx context.Context, keyword string, offset, limit int) ([]model.User, int64, error) {
+	query := userRepository.enabledUsers(ctx).Model(&model.User{})
 	if keyword != "" {
-		query = query.Where("strpos(lower(username), lower(?)) > 0 OR strpos(lower(nickname), lower(?)) > 0", keyword, keyword)
+		// TODO: 优化
+		query = query.Where("(strpos(lower(username), lower(?)) > 0 OR strpos(lower(nickname), lower(?)) > 0)", keyword, keyword)
 	}
 	var total int64
 	if err := query.Count(&total).Error; err != nil {
@@ -59,9 +68,9 @@ func (r *UserRepository) List(ctx context.Context, keyword string, offset, limit
 }
 
 // Update 通过单条 UPDATE 修改指定列并返回该次写入的记录。
-func (r *UserRepository) Update(ctx context.Context, id int64, version *int, changes map[string]any) (*model.User, error) {
+func (userRepository *UserRepository) Update(ctx context.Context, id int64, version *int, changes map[string]any) (*model.User, error) {
 	var record model.User
-	query := r.db.WithContext(ctx).Model(&record).Where("id = ?", id)
+	query := userRepository.enabledUsers(ctx).Model(&record).Where("id = ?", id)
 	if version != nil {
 		query = query.Where("version = ?", *version)
 	}
@@ -77,14 +86,15 @@ func (r *UserRepository) Update(ctx context.Context, id int64, version *int, cha
 	if version == nil {
 		return nil, ErrNotFound
 	}
-	if _, err := r.Get(ctx, id); err != nil {
+	if _, err := userRepository.Get(ctx, id); err != nil {
 		return nil, err
 	}
 	return nil, ErrVersionConflict
 }
 
-func (r *UserRepository) Delete(ctx context.Context, id int64) error {
-	result := r.db.WithContext(ctx).Delete(&model.User{}, id)
+func (userRepository *UserRepository) Delete(ctx context.Context, id int64) error {
+	result := userRepository.enabledUsers(ctx).Model(&model.User{}).Where("id = ?", id).
+		Updates(map[string]any{"enabled": "N", "version": gorm.Expr("version + 1")})
 	if result.Error != nil {
 		return userDBError(result.Error)
 	}
@@ -95,9 +105,16 @@ func (r *UserRepository) Delete(ctx context.Context, id int64) error {
 }
 
 var userReturnColumns = []clause.Column{
-	{Name: "id"}, {Name: "username"}, {Name: "nickname"}, {Name: "remark"},
-	{Name: "status"}, {Name: "roles"}, {Name: "created_at"}, {Name: "updated_at"},
-	{Name: "enabled"}, {Name: "version"},
+	{Name: "id"},
+	{Name: "username"},
+	{Name: "nickname"},
+	{Name: "remark"},
+	{Name: "status"},
+	{Name: "roles"},
+	{Name: "created_at"},
+	{Name: "updated_at"},
+	{Name: "enabled"},
+	{Name: "version"},
 }
 
 func userDBError(err error) error {
