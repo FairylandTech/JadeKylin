@@ -86,6 +86,8 @@ func fieldMessage(fe validator.FieldError) string {
 		return fmt.Sprintf("%s must be at least %s", field, fe.Param())
 	case "max":
 		return fmt.Sprintf("%s must be at most %s", field, fe.Param())
+	case "oneof":
+		return fmt.Sprintf("%s must be one of [%s]", field, fe.Param())
 	default:
 		return fmt.Sprintf("%s failed on '%s'", field, fe.Tag())
 	}

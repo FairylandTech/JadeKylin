@@ -2,9 +2,13 @@
  * Copyright (c) 2026 Beau Dean. All rights reserved.
  ******************************************************************************/
 
-/*******************************************************************************
- * Copyright (c) 2026 Beau Dean. All rights reserved.
- ******************************************************************************/
+/******************************************************************************
+ * @software: GoLand
+ * @author: Beau Dean (Hean)
+ * @contact: https://github.com/FairylandTech
+ * @organization: https://github.com/FairylandFuture
+ * @datetime: 2026-11-13 13:56:36 America/Los_Angeles
+ *****************************************************************************/
 
 package handler
 
@@ -83,6 +87,40 @@ func (handler *UserHandler) Update(ctx *gin.Context) {
 		return
 	}
 	handler.Success(ctx, record)
+}
+
+func (handler *UserHandler) ChangePassword(ctx *gin.Context) {
+	var uri requests.URI
+	if err := handler.BindURI(ctx, &uri); err != nil {
+		handler.Fail(ctx, err)
+		return
+	}
+	var req requests.ChangePasswordRequest
+	if err := handler.BindJSON(ctx, &req); err != nil {
+		handler.Fail(ctx, err)
+		return
+	}
+	if err := handler.userService.ChangePassword(ctx.Request.Context(), uri.ID, &req); err != nil {
+		handler.Fail(ctx, err)
+		return
+	}
+	handler.Success(ctx, nil)
+}
+
+func (handler *UserHandler) ResetPassword(ctx *gin.Context) {
+	var uri requests.URI
+	if err := handler.BindURI(ctx, &uri); err != nil {
+		handler.Fail(ctx, err)
+		return
+	}
+	result, err := handler.userService.ResetPassword(ctx.Request.Context(), uri.ID)
+	if err != nil {
+		handler.Fail(ctx, err)
+		return
+	}
+	// 响应包含明文密码，禁止任何中间层缓存。
+	ctx.Header("Cache-Control", "no-store")
+	handler.Success(ctx, result)
 }
 
 func (handler *UserHandler) Delete(ctx *gin.Context) {

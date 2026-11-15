@@ -42,6 +42,8 @@ type Options struct {
 
 type ctxKey struct{}
 
+type traceIDKey struct{}
+
 var (
 	mu     sync.RWMutex           // 保护全局 logger 的读写锁
 	global *zap.Logger            // 全局 logger
@@ -137,6 +139,20 @@ func Sync() error {
 // NewContext 返回附带 logger 的新 context。
 func NewContext(ctx context.Context, l *zap.Logger) context.Context {
 	return context.WithValue(ctx, ctxKey{}, l)
+}
+
+// WithTraceID 返回附带 trace id 的新 context。
+func WithTraceID(ctx context.Context, traceID string) context.Context {
+	return context.WithValue(ctx, traceIDKey{}, traceID)
+}
+
+// TraceID 从 context 中取出 trace id；不存在时返回空字符串。
+func TraceID(ctx context.Context) string {
+	if ctx == nil {
+		return ""
+	}
+	traceID, _ := ctx.Value(traceIDKey{}).(string)
+	return traceID
 }
 
 // FromContext 从 context 中获取 logger；若不存在则返回全局 logger。

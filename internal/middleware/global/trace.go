@@ -37,7 +37,7 @@ func (m *Middleware) Trace() gin.HandlerFunc {
 		// 创建一个带有 trace_id 的日志对象
 		log := logger.L().With(zap.String(consts.TraceKey, traceID))
 		// 将日志对象添加到请求上下文中
-		ctx.Request = ctx.Request.WithContext(logger.NewContext(ctx.Request.Context(), log))
+		ctx.Request = ctx.Request.WithContext(logger.WithTraceID(logger.NewContext(ctx.Request.Context(), log), traceID))
 
 		ctx.Next()
 	}

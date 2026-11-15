@@ -13,41 +13,23 @@
 package model
 
 import (
-	"database/sql/driver"
 	"time"
 
-	"github.com/jackc/pgx/v5/pgtype"
+	"jkylin.com/kylin/v2/internal/model/valueobject"
 )
 
-type RoleList []string
-
-func (roles *RoleList) Scan(src any) error {
-	return pgtype.NewMap().SQLScanner((*[]string)(roles)).Scan(src)
-}
-
-func (roles *RoleList) Value() (driver.Value, error) {
-	if roles == nil || len(*roles) == 0 {
-		return "{}", nil
-	}
-	encoded, err := pgtype.NewMap().Encode(pgtype.VarcharArrayOID, pgtype.TextFormatCode, []string(*roles), nil)
-	if err != nil {
-		return nil, err
-	}
-	return string(encoded), nil
-}
-
 type User struct {
-	ID        int64     `gorm:"primaryKey;autoIncrement" json:"id"`
-	Username  string    `json:"username"`
-	Password  string    `json:"-"`
-	Nickname  string    `json:"nickname"`
-	Remark    string    `json:"remark"`
-	Status    string    `gorm:"default:Y" json:"status"`
-	Roles     *RoleList `gorm:"type:varchar[];default:(-)" json:"roles"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
-	Enabled   string    `gorm:"default:Y" json:"enabled"`
-	Version   int       `gorm:"default:1" json:"version"`
+	ID        int64                 `gorm:"primaryKey;autoIncrement" json:"id"`
+	Username  string                `json:"username"`
+	Password  string                `json:"-"`
+	Nickname  string                `json:"nickname"`
+	Remark    string                `json:"remark"`
+	Status    string                `gorm:"default:Y" json:"status"`
+	Roles     *valueobject.RoleList `gorm:"type:varchar[];default:(-)" json:"roles"`
+	CreatedAt time.Time             `json:"created_at"`
+	UpdatedAt time.Time             `json:"updated_at"`
+	Enabled   string                `gorm:"default:Y" json:"enabled"`
+	Version   int                   `gorm:"default:1" json:"version"`
 }
 
 func (User) TableName() string {

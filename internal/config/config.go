@@ -126,12 +126,10 @@ func Default() *Config {
 
 var current = Default()
 
-// Get 返回当前生效的配置。
-func Get() *Config { return current }
+func Get() *Config {
+	return current
+}
 
-// Load 按默认值、配置文件、环境变量的顺序加载配置。
-// path 为空时依次尝试环境变量 KYLIN_CONFIG 和 configs/config.yaml；
-// 文件不存在时使用默认配置。
 func Load(path string) (*Config, error) {
 	if path == "" {
 		path = os.Getenv(consts.EnvConfigPath)
@@ -163,6 +161,11 @@ func Load(path string) (*Config, error) {
 
 	if redisUrl, ok := os.LookupEnv(consts.KylinRedisURL); ok {
 		cfg.Redis.URL = redisUrl
+	}
+
+	// 如果是 debug 模式，强制日志级别为 debug，避免在开发环境中漏掉日志。
+	if cfg.App.Mode == "debug" {
+		cfg.Log.Level = "debug"
 	}
 
 	current = cfg

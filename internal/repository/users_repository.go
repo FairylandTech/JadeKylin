@@ -14,18 +14,12 @@ package repository
 
 import (
 	"context"
-	"errors"
+	"maps"
 
-	"github.com/jackc/pgx/v5/pgconn"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 	"jkylin.com/kylin/v2/internal/model"
-)
-
-var (
-	ErrNotFound        = errors.New("record not found")
-	ErrDuplicate       = errors.New("duplicate record")
-	ErrVersionConflict = errors.New("record version conflict")
+	"jkylin.com/kylin/v2/internal/pkg/support"
 )
 
 type UserRepository struct {
@@ -36,72 +30,80 @@ func NewUserRepository(db *gorm.DB) *UserRepository {
 	return &UserRepository{db: db}
 }
 
-func (userRepository *UserRepository) enabledUsers(ctx context.Context) *gorm.DB {
-	return userRepository.db.WithContext(ctx).Where("enabled = ?", "Y")
-}
-
 func (userRepository *UserRepository) Create(ctx context.Context, record *model.User) error {
-	return userDBError(userRepository.db.WithContext(ctx).Create(record).Error)
+	return support.DBError(userRepository.db.WithContext(ctx).Create(record).Error)
 }
 
 func (userRepository *UserRepository) Get(ctx context.Context, id int64) (*model.User, error) {
-	var record model.User
-	if err := userRepository.enabledUsers(ctx).Omit("password").First(&record, id).Error; err != nil {
-		return nil, userDBError(err)
-	}
-	return &record, nil
+	return support.FirstRecord[model.User](support.EnabledRecords(ctx, userRepository.db).
+		Omit("password").
+		Where("id = ?", id))
 }
 
 func (userRepository *UserRepository) List(ctx context.Context, keyword string, offset, limit int) ([]model.User, int64, error) {
-	query := userRepository.enabledUsers(ctx).Model(&model.User{})
+	query := support.EnabledRecords(ctx, userRepository.db).Omit("password")
 	if keyword != "" {
-		// TODO: 优化
-		query = query.Where("(strpos(lower(username), lower(?)) > 0 OR strpos(lower(nickname), lower(?)) > 0)", keyword, keyword)
+		// ILIKE 能命中 migration 中的 pg_trgm GIN 索引；strpos(lower(...)) 只能全表扫描。
+		pattern := support.ContainsPattern(keyword)
+		query = query.Where(`(username ILIKE ? ESCAPE '\' OR nickname ILIKE ? ESCAPE '\')`, pattern, pattern)
 	}
-	var total int64
-	if err := query.Count(&total).Error; err != nil {
-		return nil, 0, err
-	}
-	records := make([]model.User, 0)
-	err := query.Omit("password").Order("id DESC").Offset(offset).Limit(limit).Find(&records).Error
-	return records, total, err
+	return support.ListRecords[model.User](query, offset, limit)
 }
 
-// Update 通过单条 UPDATE 修改指定列并返回该次写入的记录。
 func (userRepository *UserRepository) Update(ctx context.Context, id int64, version *int, changes map[string]any) (*model.User, error) {
 	var record model.User
-	query := userRepository.enabledUsers(ctx).Model(&record).Where("id = ?", id)
+	query := support.EnabledRecords(ctx, userRepository.db).Model(&record).Where("id = ?", id)
 	if version != nil {
 		query = query.Where("version = ?", *version)
 	}
-	changes["version"] = gorm.Expr("version + 1")
-	result := query.Clauses(clause.Returning{Columns: userReturnColumns}).Updates(changes)
+	updates := make(map[string]any, len(changes)+1)
+	maps.Copy(updates, changes)
+	updates["version"] = gorm.Expr("version + 1")
+	result := query.Clauses(clause.Returning{Columns: userReturnColumns}).Updates(updates)
 	if result.Error != nil {
-		return nil, userDBError(result.Error)
+		return nil, support.DBError(result.Error)
 	}
 	if result.RowsAffected > 0 {
 		record.Password = ""
 		return &record, nil
 	}
 	if version == nil {
-		return nil, ErrNotFound
+		return nil, support.ErrNotFound
 	}
-	if _, err := userRepository.Get(ctx, id); err != nil {
-		return nil, err
+	if err := support.EnabledRecords(ctx, userRepository.db).Select("id").First(&model.User{}, "id = ?", id).Error; err != nil {
+		return nil, support.DBError(err)
 	}
-	return nil, ErrVersionConflict
+	return nil, support.ErrVersionConflict
+}
+
+// GetPasswordHash 返回启用用户的密码哈希，仅供密码校验使用。
+func (userRepository *UserRepository) GetPasswordHash(ctx context.Context, id int64) (string, error) {
+	var hash string
+	result := support.EnabledRecords(ctx, userRepository.db).Model(&model.User{}).Where("id = ?", id).Limit(1).Pluck("password", &hash)
+	if result.Error != nil {
+		return "", support.DBError(result.Error)
+	}
+	if result.RowsAffected == 0 {
+		return "", support.ErrNotFound
+	}
+	return hash, nil
+}
+
+// UpdatePassword 写入新密码哈希并递增版本；expectedHash 非空时要求当前哈希未被修改。
+func (userRepository *UserRepository) UpdatePassword(ctx context.Context, id int64, expectedHash *string, hash string) error {
+	query := support.EnabledRecords(ctx, userRepository.db).Model(&model.User{}).Where("id = ?", id)
+	if expectedHash != nil {
+		query = query.Where("password = ?", *expectedHash)
+	}
+	return support.WriteError(query.Updates(map[string]any{"password": hash, "version": gorm.Expr("version + 1")}))
 }
 
 func (userRepository *UserRepository) Delete(ctx context.Context, id int64) error {
-	result := userRepository.enabledUsers(ctx).Model(&model.User{}).Where("id = ?", id).
+	result := support.EnabledRecords(ctx, userRepository.db).
+		Model(&model.User{}).
+		Where("id = ?", id).
 		Updates(map[string]any{"enabled": "N", "version": gorm.Expr("version + 1")})
-	if result.Error != nil {
-		return userDBError(result.Error)
-	}
-	if result.RowsAffected == 0 {
-		return ErrNotFound
-	}
-	return nil
+	return support.WriteError(result)
 }
 
 var userReturnColumns = []clause.Column{
@@ -115,16 +117,4 @@ var userReturnColumns = []clause.Column{
 	{Name: "updated_at"},
 	{Name: "enabled"},
 	{Name: "version"},
-}
-
-func userDBError(err error) error {
-	var pgErr *pgconn.PgError
-	switch {
-	case errors.Is(err, gorm.ErrRecordNotFound):
-		return ErrNotFound
-	case errors.Is(err, gorm.ErrDuplicatedKey), errors.As(err, &pgErr) && pgErr.Code == "23505":
-		return ErrDuplicate
-	default:
-		return err
-	}
 }

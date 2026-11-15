@@ -14,11 +14,15 @@ package router
 
 import (
 	"net/http"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 	swaggerFiles "github.com/swaggo/files"
 	ginSwagger "github.com/swaggo/gin-swagger"
 	"gorm.io/gorm"
+	"jkylin.com/kylin/v2/internal/middleware"
+	"jkylin.com/kylin/v2/internal/router/permissions"
+	"jkylin.com/kylin/v2/internal/router/roles"
 	"jkylin.com/kylin/v2/internal/router/users"
 	"jkylin.com/kylin/v2/pkg/response"
 )
@@ -33,5 +37,11 @@ func Init(engine *gin.Engine, db *gorm.DB, userAdminToken string) {
 
 	engine.GET("/swagger/*any", ginSwagger.WrapHandler(swaggerFiles.Handler))
 
-	users.Router(engine, db, userAdminToken)
+	// 管理接口（用户 / 角色 / 权限）需要数据库和管理令牌同时配置才注册。
+	if db != nil && strings.TrimSpace(userAdminToken) != "" {
+		admin := engine.Group("", middleware.AdminToken(userAdminToken))
+		users.Router(admin, db)
+		roles.Router(admin, db)
+		permissions.Router(admin, db)
+	}
 }

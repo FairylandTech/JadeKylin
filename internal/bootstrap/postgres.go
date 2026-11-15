@@ -1,11 +1,21 @@
+/*******************************************************************************
+ * Copyright (c) 2026 Beau Dean. All rights reserved.
+ ******************************************************************************/
+
+/******************************************************************************
+ * @software: GoLand
+ * @author: Beau Dean (Hean)
+ * @contact: https://github.com/FairylandTech
+ * @organization: https://github.com/FairylandFuture
+ * @datetime: 2026-11-13 11:54:00 America/Los_Angeles
+ *****************************************************************************/
+
 package bootstrap
 
 import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
-	"os"
 	"strings"
 	"time"
 
@@ -13,7 +23,6 @@ import (
 	"github.com/jackc/pgx/v5/stdlib"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
-	gormlogger "gorm.io/gorm/logger"
 	"jkylin.com/kylin/v2/internal/config"
 )
 
@@ -58,11 +67,7 @@ func InitPostgres(ctx context.Context, cfg config.Postgres) (*gorm.DB, func(), e
 	}
 	db, err := gorm.Open(postgres.New(postgres.Config{Conn: sqlDB}), &gorm.Config{
 		DisableAutomaticPing: true,
-		Logger: gormlogger.New(log.New(os.Stderr, "", log.LstdFlags), gormlogger.Config{
-			SlowThreshold:        200 * time.Millisecond,
-			LogLevel:             gormlogger.Warn,
-			ParameterizedQueries: true,
-		}),
+		Logger:               NewZapGormLogger(200 * time.Millisecond),
 	})
 	if err != nil {
 		closePostgres()

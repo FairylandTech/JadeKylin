@@ -1,3 +1,15 @@
+/*******************************************************************************
+ * Copyright (c) 2026 Beau Dean. All rights reserved.
+ ******************************************************************************/
+
+/******************************************************************************
+ * @software: GoLand
+ * @author: Beau Dean (Hean)
+ * @contact: https://github.com/FairylandTech
+ * @organization: https://github.com/FairylandFuture
+ * @datetime: 2026-11-13 11:54:00 America/Los_Angeles
+ *****************************************************************************/
+
 package config_test
 
 import (

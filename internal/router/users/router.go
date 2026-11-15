@@ -1,38 +1,33 @@
+/*******************************************************************************
+ * Copyright (c) 2026 Beau Dean. All rights reserved.
+ ******************************************************************************/
+
+/******************************************************************************
+ * @software: GoLand
+ * @author: Beau Dean (Hean)
+ * @contact: https://github.com/FairylandTech
+ * @organization: https://github.com/FairylandFuture
+ * @datetime: 2026-11-13 13:56:36 America/Los_Angeles
+ *****************************************************************************/
+
 package users
 
 import (
-	"crypto/sha256"
-	"crypto/subtle"
-	"strings"
-
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
 	"jkylin.com/kylin/v2/internal/handler"
 	"jkylin.com/kylin/v2/internal/repository"
 	"jkylin.com/kylin/v2/internal/service"
-	"jkylin.com/kylin/v2/pkg/errcode"
-	"jkylin.com/kylin/v2/pkg/response"
 )
 
-func Router(engine *gin.Engine, db *gorm.DB, adminToken string) {
-	if db == nil || strings.TrimSpace(adminToken) == "" {
-		return
-	}
-
-	expected := sha256.Sum256([]byte(adminToken))
-	users := engine.Group("/users", func(ctx *gin.Context) {
-		scheme, token, ok := strings.Cut(ctx.GetHeader("Authorization"), " ")
-		actual := sha256.Sum256([]byte(token))
-		if !ok || !strings.EqualFold(scheme, "Bearer") || subtle.ConstantTimeCompare(expected[:], actual[:]) != 1 {
-			ctx.Header("WWW-Authenticate", "Bearer")
-			response.AbortSilently(ctx, errcode.Unauthorized)
-		}
-	})
-
-	userHandler := handler.NewUserHandler(service.NewUserService(repository.NewUserRepository(db)))
+func Router(group *gin.RouterGroup, db *gorm.DB) {
+	userHandler := handler.NewUserHandler(service.NewUserService(repository.NewUserRepository(db), repository.NewRoleRepository(db)))
+	users := group.Group("/users")
 	users.POST("", userHandler.Create)
 	users.GET("", userHandler.List)
 	users.GET("/:id", userHandler.Get)
 	users.PUT("/:id", userHandler.Update)
 	users.DELETE("/:id", userHandler.Delete)
+	users.PUT("/:id/password", userHandler.ChangePassword)
+	users.POST("/:id/password/reset", userHandler.ResetPassword)
 }
