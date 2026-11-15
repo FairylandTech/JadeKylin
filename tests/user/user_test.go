@@ -23,6 +23,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/alicebob/miniredis/v2"
 	"github.com/gin-gonic/gin"
@@ -34,6 +35,8 @@ import (
 	"jkylin.com/kylin/v2/internal/module/permission"
 	"jkylin.com/kylin/v2/internal/module/role"
 	"jkylin.com/kylin/v2/internal/module/user"
+	"jkylin.com/kylin/v2/internal/pkg/authorization"
+	"jkylin.com/kylin/v2/internal/pkg/identity"
 	"jkylin.com/kylin/v2/internal/router"
 )
 
@@ -63,17 +66,25 @@ func TestUserRouteConfiguration(t *testing.T) {
 		t.Run(testCase.name, func(t *testing.T) {
 			engine := gin.New()
 			router.Initialize(engine, testCase.dependencies)
-			for _, path := range []string{"/users", "/roles", "/permissions", "/api-permissions", "/auth/me"} {
+			for _, path := range []string{"/users", "/roles", "/permissions", "/auth/me"} {
 				assertStatus(t, request(engine, http.MethodGet, path, testCase.header, ""), testCase.status)
 			}
 			assertStatus(t, request(engine, http.MethodGet, "/healthz", "", ""), http.StatusOK)
 		})
 	}
 
-	// 参数校验发生在访问数据库之前：直接挂载路由（跳过认证）验证请求校验。
+	// 参数校验发生在访问数据库之前：直接挂载路由，以已缓存权限的用户 1 身份调用，验证请求校验。
+	cache := authorization.NewCache(client, 10*time.Minute)
+	if err := cache.SetUserPermissions(context.Background(), 1, []string{"system.users", "system.roles"}); err != nil {
+		t.Fatal(err)
+	}
+	authorizer := authorization.NewAuthorizer(cache, user.NewRepository(database))
 	engine := gin.New()
-	user.RegisterRoutes(engine.Group(""), user.NewService(user.NewRepository(database), role.NewRepository(database)))
-	role.RegisterRoutes(engine.Group(""), role.NewService(role.NewRepository(database), permission.NewRepository(database)))
+	authenticated := engine.Group("", func(ctx *gin.Context) {
+		identity.Attach(ctx, &identity.Principal{UserID: 1, Username: "tester", SessionID: "session"})
+	})
+	user.RegisterRoutes(authenticated, user.NewService(user.NewRepository(database), role.NewRepository(database), authorizer))
+	role.RegisterRoutes(authenticated, role.NewService(role.NewRepository(database), permission.NewRepository(database), authorizer))
 	for _, input := range []struct{ method, path, body string }{
 		{http.MethodPost, "/users", `{"username":"   ","password":"test-password"}`},
 		{http.MethodPost, "/users", `{"username":"test","password":"` + strings.Repeat("密", 25) + `"}`},

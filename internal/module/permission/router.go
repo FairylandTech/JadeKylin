@@ -12,13 +12,10 @@
 
 package permission
 
-import (
-	"github.com/gin-gonic/gin"
-	"gorm.io/gorm"
-)
+import "github.com/gin-gonic/gin"
 
 // RegisterRoutes 注册权限查询接口。
-func RegisterRoutes(group *gin.RouterGroup, database *gorm.DB) {
-	permissionHandler := NewHandler(NewService(NewRepository(database)))
+func RegisterRoutes(group *gin.RouterGroup, permissionService *Service) {
+	permissionHandler := NewHandler(permissionService)
 	group.GET("/permissions", permissionHandler.List)
 }

@@ -69,17 +69,12 @@ func (authHandler *Handler) Logout(ctx *gin.Context) {
 
 // ChangePassword 当前用户修改自己的密码；成功后该用户所有设备（包括当前设备）下线，需要重新登录。
 func (authHandler *Handler) ChangePassword(ctx *gin.Context) {
-	principal, err := identity.Require(ctx)
-	if err != nil {
-		authHandler.Fail(ctx, err)
-		return
-	}
 	var requestBody user.ChangePasswordRequest
 	if err := authHandler.BindJSON(ctx, &requestBody); err != nil {
 		authHandler.Fail(ctx, err)
 		return
 	}
-	if err := authHandler.userService.ChangePassword(ctx.Request.Context(), principal.UserID, &requestBody); err != nil {
+	if err := authHandler.userService.ChangeOwnPassword(ctx.Request.Context(), &requestBody); err != nil {
 		authHandler.Fail(ctx, err)
 		return
 	}

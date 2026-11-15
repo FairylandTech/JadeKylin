@@ -20,7 +20,6 @@ import (
 	"github.com/swaggo/files"
 	"github.com/swaggo/gin-swagger"
 	"jkylin.com/kylin/v2/internal/middleware/security"
-	"jkylin.com/kylin/v2/internal/module/apipermission"
 	"jkylin.com/kylin/v2/internal/module/auth"
 	"jkylin.com/kylin/v2/internal/module/permission"
 	"jkylin.com/kylin/v2/internal/module/role"
@@ -46,17 +45,14 @@ func Initialize(engine *gin.Engine, dependencies Dependencies) {
 	}
 	services := NewServices(dependencies)
 
-	// 认证：解析 JWT 得到 user id 写入上下文；鉴权：按接口放行权限判断当前用户能否访问（数据从 Redis 读取）。
+	// 认证：解析 JWT 得到 user id 写入上下文。鉴权在各服务方法内完成：每个方法声明自己需要的权限 code。
 	authentication := security.Authentication(services.Auth)
 	if dependencies.SkipAuth {
 		authentication = security.LocalAuthentication(services.Auth, localPrincipalResolver(services.Auth, dependencies.LocalUsername))
 	}
 	authenticated := engine.Group("", authentication)
 	auth.RegisterRoutes(engine.Group(""), authenticated, services.Auth, services.Users)
-
-	protected := authenticated.Group("", security.Authorization(services.ApiPermissions))
-	user.RegisterRoutes(protected, services.Users)
-	role.RegisterRoutes(protected, services.Roles)
-	permission.RegisterRoutes(protected, dependencies.Database)
-	apipermission.RegisterRoutes(protected, services.ApiPermissions)
+	user.RegisterRoutes(authenticated, services.Users)
+	role.RegisterRoutes(authenticated, services.Roles)
+	permission.RegisterRoutes(authenticated, services.Permissions)
 }

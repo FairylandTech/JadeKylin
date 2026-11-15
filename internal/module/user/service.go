@@ -20,6 +20,7 @@ import (
 	"jkylin.com/kylin/v2/internal/module/role"
 	"jkylin.com/kylin/v2/internal/pkg/authorization"
 	"jkylin.com/kylin/v2/internal/pkg/credential"
+	"jkylin.com/kylin/v2/internal/pkg/identity"
 	"jkylin.com/kylin/v2/internal/pkg/pagination"
 	"jkylin.com/kylin/v2/internal/pkg/persistence"
 	"jkylin.com/kylin/v2/internal/pkg/validation"
@@ -34,6 +35,8 @@ const (
 	administratorNickname = "Administrator"
 	// resetPasswordLength 是重置密码时生成的随机密码长度。
 	resetPasswordLength = 16
+	// managementPermission 是用户管理接口需要的权限 code。
+	managementPermission = "system.users"
 )
 
 // SessionRevoker 让用户所有登录会话下线。
@@ -46,23 +49,12 @@ type Service struct {
 	RoleRepository *role.Repository
 	// SessionRevoker 为 nil 时（未启用登录）跳过会话下线。
 	SessionRevoker SessionRevoker
-	// AuthorizationCache 为 nil 时（未启用登录）跳过鉴权缓存失效。
-	AuthorizationCache authorization.Invalidator
+	// Authorizer 判断当前用户能否调用管理方法；为 nil 时（未启用登录）管理方法一律拒绝，缓存失效直接跳过。
+	Authorizer *authorization.Authorizer
 }
 
-func NewService(userRepository *Repository, roleRepository *role.Repository) *Service {
-	return &Service{UserRepository: userRepository, RoleRepository: roleRepository}
-}
-
-// invalidateAuthorization 用户角色、状态变更或删除后删除其权限缓存，下次请求从数据库重新加载。
-func (userService *Service) invalidateAuthorization(ctx context.Context, userID int64) error {
-	if userService.AuthorizationCache == nil {
-		return nil
-	}
-	if err := userService.AuthorizationCache.InvalidateUser(ctx, userID); err != nil {
-		return authorization.CacheRefreshError(err)
-	}
-	return nil
+func NewService(userRepository *Repository, roleRepository *role.Repository, authorizer *authorization.Authorizer) *Service {
+	return &Service{UserRepository: userRepository, RoleRepository: roleRepository, Authorizer: authorizer}
 }
 
 // revokeSessions 在密码变更、禁用、删除后让用户所有设备下线。
@@ -77,6 +69,14 @@ func (userService *Service) revokeSessions(ctx context.Context, userID int64) er
 }
 
 func (userService *Service) Create(ctx context.Context, requestBody *CreateRequest) (*User, error) {
+	if err := userService.Authorizer.Require(ctx, managementPermission); err != nil {
+		return nil, err
+	}
+	return userService.create(ctx, requestBody)
+}
+
+// create 创建用户，不做权限判断（EnsureAdmin 在启动时复用）。
+func (userService *Service) create(ctx context.Context, requestBody *CreateRequest) (*User, error) {
 	username, err := validation.RequireText("username", requestBody.Username)
 	if err != nil {
 		return nil, err
@@ -104,11 +104,17 @@ func (userService *Service) Create(ctx context.Context, requestBody *CreateReque
 }
 
 func (userService *Service) Get(ctx context.Context, id int64) (*User, error) {
+	if err := userService.Authorizer.Require(ctx, managementPermission); err != nil {
+		return nil, err
+	}
 	record, err := userService.UserRepository.Get(ctx, id)
 	return record, TranslateError(err)
 }
 
 func (userService *Service) List(ctx context.Context, query *pagination.KeywordQuery) ([]User, int64, error) {
+	if err := userService.Authorizer.Require(ctx, managementPermission); err != nil {
+		return nil, 0, err
+	}
 	if err := query.Validate(); err != nil {
 		return nil, 0, err
 	}
@@ -117,6 +123,9 @@ func (userService *Service) List(ctx context.Context, query *pagination.KeywordQ
 }
 
 func (userService *Service) Update(ctx context.Context, id int64, requestBody *UpdateRequest) (*User, error) {
+	if err := userService.Authorizer.Require(ctx, managementPermission); err != nil {
+		return nil, err
+	}
 	changes := make(map[string]any)
 	for column, value := range map[string]*string{
 		"nickname": requestBody.Nickname,
@@ -149,7 +158,7 @@ func (userService *Service) Update(ctx context.Context, id int64, requestBody *U
 		return nil, TranslateError(err)
 	}
 	if requestBody.Roles != nil || requestBody.Status != nil {
-		if err := userService.invalidateAuthorization(ctx, id); err != nil {
+		if err := userService.Authorizer.InvalidateUser(ctx, id); err != nil {
 			return nil, err
 		}
 	}
@@ -161,8 +170,25 @@ func (userService *Service) Update(ctx context.Context, id int64, requestBody *U
 	return record, nil
 }
 
-// ChangePassword 校验旧密码后写入新密码。
+// ChangePassword 管理员修改指定用户的密码（需要 system.users）。
 func (userService *Service) ChangePassword(ctx context.Context, id int64, requestBody *ChangePasswordRequest) error {
+	if err := userService.Authorizer.Require(ctx, managementPermission); err != nil {
+		return err
+	}
+	return userService.changePassword(ctx, id, requestBody)
+}
+
+// ChangeOwnPassword 当前登录用户修改自己的密码，只要求登录，不需要权限。
+func (userService *Service) ChangeOwnPassword(ctx context.Context, requestBody *ChangePasswordRequest) error {
+	principal, err := identity.Require(ctx)
+	if err != nil {
+		return err
+	}
+	return userService.changePassword(ctx, principal.UserID, requestBody)
+}
+
+// changePassword 校验旧密码后写入新密码。
+func (userService *Service) changePassword(ctx context.Context, id int64, requestBody *ChangePasswordRequest) error {
 	current, err := userService.UserRepository.GetPasswordHash(ctx, id)
 	if err != nil {
 		return TranslateError(err)
@@ -194,7 +220,7 @@ func (userService *Service) EnsureAdmin(ctx context.Context, username, password 
 		return false, err
 	}
 	roles := valueobject.RoleList{administratorRoleCode}
-	_, err = userService.Create(ctx, &CreateRequest{
+	_, err = userService.create(ctx, &CreateRequest{
 		Username: username,
 		Password: password,
 		Nickname: administratorNickname,
@@ -208,6 +234,9 @@ func (userService *Service) EnsureAdmin(ctx context.Context, username, password 
 
 // ResetPassword 生成随机新密码并返回明文，数据库只保存哈希。
 func (userService *Service) ResetPassword(ctx context.Context, id int64) (*ResetPasswordResponse, error) {
+	if err := userService.Authorizer.Require(ctx, managementPermission); err != nil {
+		return nil, err
+	}
 	password, err := credential.GeneratePassword(resetPasswordLength)
 	if err != nil {
 		return nil, errcode.Internal.Wrap(err)
@@ -226,10 +255,13 @@ func (userService *Service) ResetPassword(ctx context.Context, id int64) (*Reset
 }
 
 func (userService *Service) Delete(ctx context.Context, id int64) error {
+	if err := userService.Authorizer.Require(ctx, managementPermission); err != nil {
+		return err
+	}
 	if err := userService.UserRepository.Delete(ctx, id); err != nil {
 		return TranslateError(err)
 	}
-	if err := userService.invalidateAuthorization(ctx, id); err != nil {
+	if err := userService.Authorizer.InvalidateUser(ctx, id); err != nil {
 		return err
 	}
 	return userService.revokeSessions(ctx, id)

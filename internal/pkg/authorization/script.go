@@ -7,12 +7,21 @@
  * @author: Beau Dean (Hean)
  * @contact: https://github.com/FairylandTech
  * @organization: https://github.com/FairylandFuture
- * @datetime: 2026-11-15 01:30:00 America/Los_Angeles
+ * @datetime: 2026-11-15 10:00:00 America/Los_Angeles
  *****************************************************************************/
 
-package apipermission
+package authorization
 
-type UpdateRequest struct {
-	Permission  *string `json:"permission" binding:"omitempty,required,max=128"`
-	Description *string `json:"description" binding:"omitempty,max=512"`
-}
+import (
+	_ "embed"
+
+	"github.com/redis/go-redis/v9"
+)
+
+// Lua 脚本单独存放在 script 目录，编译时嵌入。
+
+//go:embed script/check.lua
+var checkPermissionSource string
+
+// checkPermissionScript 判断用户是否拥有权限，返回值对应 CheckResult。
+var checkPermissionScript = redis.NewScript(checkPermissionSource)

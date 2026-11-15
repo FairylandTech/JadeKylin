@@ -20,7 +20,6 @@ import (
 	"testing"
 
 	"gorm.io/gorm"
-	"jkylin.com/kylin/v2/internal/module/apipermission"
 	"jkylin.com/kylin/v2/internal/module/user"
 	"jkylin.com/kylin/v2/internal/router"
 )
@@ -69,42 +68,19 @@ func verifyLoginFlow(t *testing.T, database *gorm.DB) {
 	call(http.MethodPut, userPath, admin, `{"roles":[]}`, http.StatusOK)
 	call(http.MethodGet, "/users", first, "", http.StatusForbidden)
 
-	// 接口放行权限可直接修改且立即生效：把 GET /users 改为 logs.view 后，拥有 auditor（含 logs.view）的用户可以访问。
-	apiPermissions := decodeData[[]apipermission.ApiPermission](t, call(http.MethodGet, "/api-permissions", admin, "", http.StatusOK))
-	var listUsers *apipermission.ApiPermission
-	for index := range apiPermissions {
-		if apiPermissions[index].Method == http.MethodGet && apiPermissions[index].Path == "/users" {
-			listUsers = &apiPermissions[index]
-		}
-	}
-	if listUsers == nil || listUsers.Permission != "system.users" || len(apiPermissions) < 15 {
-		t.Fatalf("unexpected api permissions: %+v", apiPermissions)
-	}
-	call(http.MethodGet, "/api-permissions", first, "", http.StatusForbidden)
-	listUsersPath := "/api-permissions/" + strconv.FormatInt(listUsers.ID, 10)
-	call(http.MethodPut, listUsersPath, admin, `{"permission":"no.such.permission"}`, http.StatusBadRequest)
-	call(http.MethodPut, listUsersPath, admin, `{}`, http.StatusBadRequest)
-	call(http.MethodPut, "/api-permissions/999999", admin, `{"permission":"logs.view"}`, http.StatusNotFound)
-	call(http.MethodPut, userPath, admin, `{"roles":["auditor"]}`, http.StatusOK)
-	changed := decodeData[apipermission.ApiPermission](t, call(http.MethodPut, listUsersPath, admin, `{"permission":"logs.view"}`, http.StatusOK))
-	if changed.Permission != "logs.view" || changed.Path != "/users" {
-		t.Fatalf("unexpected changed api permission: %+v", changed)
-	}
+	// 用户权限缓存在 Redis：授权后加载到用户权限集合；缓存被清空（如 Redis 重启）时自动从数据库重新加载。
+	call(http.MethodPut, userPath, admin, `{"roles":["user_manager"]}`, http.StatusOK)
 	call(http.MethodGet, "/users", first, "", http.StatusOK)
-	call(http.MethodGet, userPath, first, "", http.StatusForbidden) // 其它接口不受影响
-	// 鉴权数据已缓存到 Redis：接口表同步了最新权限，用户权限集合已加载。
-	if permission := server.redis.HGet("kylin:authz:api", "GET /users"); permission != "logs.view" {
-		t.Fatalf("api permission cache not synced: %q", permission)
-	}
-	if ok, _ := server.redis.SIsMember("kylin:authz:user:"+strconv.FormatInt(createdUser.ID, 10), "logs.view"); !ok {
+	userCacheKey := "kylin:authz:user:" + strconv.FormatInt(createdUser.ID, 10)
+	if ok, _ := server.redis.SIsMember(userCacheKey, "system.users"); !ok {
 		t.Fatal("user permissions should be cached in Redis")
 	}
-	// Redis 中的接口表被清空（如 Redis 重启）时自动从数据库重新同步。
-	server.redis.Del("kylin:authz:api")
+	server.redis.Del(userCacheKey)
 	call(http.MethodGet, "/users", first, "", http.StatusOK)
-	call(http.MethodPut, listUsersPath, admin, `{"permission":"system.users"}`, http.StatusOK)
-	call(http.MethodGet, "/users", first, "", http.StatusForbidden)
+	call(http.MethodGet, userPath, first, "", http.StatusOK)
+	call(http.MethodGet, "/permissions", first, "", http.StatusForbidden)
 	call(http.MethodPut, userPath, admin, `{"roles":[]}`, http.StatusOK)
+	call(http.MethodGet, "/users", first, "", http.StatusForbidden)
 
 	// 默认只允许一个设备在线：第二次登录后第一个 token 失效。
 	second := login("login-user", "login-password")
@@ -159,7 +135,7 @@ func verifyLocalAuth(t *testing.T, database *gorm.DB) {
 		t.Fatalf("local auth should act as admin: %+v", me)
 	}
 	call(http.MethodGet, "/users", "", "", http.StatusOK)
-	call(http.MethodGet, "/api-permissions", "", "", http.StatusOK)
+	call(http.MethodGet, "/permissions", "", "", http.StatusOK)
 
 	call(http.MethodPost, "/users", "", `{"username":"local-plain","password":"plain-password"}`, http.StatusOK)
 	plain := server.login(t, "local-plain", "plain-password")

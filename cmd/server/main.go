@@ -112,15 +112,8 @@ func run(configPath string) error {
 	router.Initialize(engine, dependencies)
 	if !dependencies.Enabled() {
 		logger.Warn("Login and management APIs disabled: requires PostgreSQL, Redis and KYLIN_JWT_SECRET")
-	} else {
-		if err := ensureAdmin(ctx, database); err != nil {
-			return fmt.Errorf("ensure initial admin: %w", err)
-		}
-		// 启动时把接口放行权限同步到 Redis，覆盖 migration 或手工修改数据库带来的变更。
-		if err := router.NewServices(dependencies).ApiPermissions.SyncCache(ctx); err != nil {
-			return fmt.Errorf("sync api permissions to Redis: %w", err)
-		}
-		logger.Info("API permissions synced to Redis")
+	} else if err := ensureAdmin(ctx, database); err != nil {
+		return fmt.Errorf("ensure initial admin: %w", err)
 	}
 
 	server := &http.Server{
@@ -184,7 +177,8 @@ func ensureAdmin(ctx context.Context, database *gorm.DB) error {
 	if strings.TrimSpace(username) == "" || password == "" {
 		return nil
 	}
-	userService := user.NewService(user.NewRepository(database), role.NewRepository(database))
+	// EnsureAdmin 不做权限判断，无需 Authorizer。
+	userService := user.NewService(user.NewRepository(database), role.NewRepository(database), nil)
 	created, err := userService.EnsureAdmin(ctx, username, password)
 	if err != nil {
 		return err

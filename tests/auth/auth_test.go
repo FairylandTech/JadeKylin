@@ -14,7 +14,6 @@ package auth_test
 
 import (
 	"context"
-	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -289,64 +288,6 @@ func TestCaptcha(t *testing.T) {
 	miniRedis.FastForward(time.Duration(configuration.CaptchaTTL+1) * time.Second)
 	if got, err := store.TakeCaptcha(ctx, other.CaptchaID); err != nil || got != "" {
 		t.Fatalf("expired captcha should be gone: %q, %v", got, err)
-	}
-}
-
-type fakeAuthorizer struct {
-	method, path  string
-	mapped, allow bool
-	err           error
-}
-
-func (authorizer *fakeAuthorizer) Authorize(_ context.Context, userID int64, method, path string) (bool, bool, error) {
-	authorizer.method, authorizer.path = method, path
-	return authorizer.mapped, authorizer.allow, authorizer.err
-}
-
-func TestAuthorizationMiddleware(t *testing.T) {
-	_, store, authService, _ := setup(t)
-	now := time.Now()
-	createSession(t, store, 5, "sid", now, 1)
-	token := "Bearer " + sign(t, secret, 5, "sid", now, 15*time.Minute)
-
-	authorizer := &fakeAuthorizer{}
-	engine := gin.New()
-	protected := engine.Group("", security.Authentication(authService), security.Authorization(authorizer))
-	protected.DELETE("/users/:id", func(ctx *gin.Context) {
-		ctx.Status(http.StatusNoContent)
-	})
-	call := func(header string) int {
-		httpRequest := httptest.NewRequest(http.MethodDelete, "/users/42", nil)
-		httpRequest.Header.Set("Authorization", header)
-		recorder := httptest.NewRecorder()
-		engine.ServeHTTP(recorder, httpRequest)
-		return recorder.Code
-	}
-
-	if code := call(""); code != http.StatusUnauthorized {
-		t.Fatalf("unauthenticated: %d", code)
-	}
-	for _, testCase := range []struct {
-		name          string
-		mapped, allow bool
-		err           error
-		want          int
-	}{
-		{name: "not configured", want: http.StatusForbidden},
-		{name: "denied", mapped: true, want: http.StatusForbidden},
-		{name: "allowed", mapped: true, allow: true, want: http.StatusNoContent},
-		{name: "store error", err: errors.New("db down"), want: http.StatusInternalServerError},
-	} {
-		t.Run(testCase.name, func(t *testing.T) {
-			*authorizer = fakeAuthorizer{mapped: testCase.mapped, allow: testCase.allow, err: testCase.err}
-			if code := call(token); code != testCase.want {
-				t.Fatalf("status=%d want=%d", code, testCase.want)
-			}
-			// 鉴权使用路由模式而不是实际路径。
-			if authorizer.method != http.MethodDelete || authorizer.path != "/users/:id" {
-				t.Fatalf("authorizer got %s %s", authorizer.method, authorizer.path)
-			}
-		})
 	}
 }
 

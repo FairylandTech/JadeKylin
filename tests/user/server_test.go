@@ -58,7 +58,7 @@ func newTestServerWith(t *testing.T, database *gorm.DB, extra router.Dependencie
 	engine := gin.New()
 	router.Initialize(engine, router.Dependencies{Database: database, Redis: client, Auth: authConfiguration, SkipAuth: extra.SkipAuth, LocalUsername: extra.LocalUsername})
 	if database != nil {
-		userService := user.NewService(user.NewRepository(database), role.NewRepository(database))
+		userService := user.NewService(user.NewRepository(database), role.NewRepository(database), nil)
 		if _, err := userService.EnsureAdmin(context.Background(), testAdminUsername, testAdminPassword); err != nil {
 			t.Fatal(err)
 		}

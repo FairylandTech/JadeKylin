@@ -26,30 +26,30 @@ import (
 	"jkylin.com/kylin/v2/pkg/errcode"
 )
 
+// managementPermission 是角色管理接口需要的权限 code。
+const managementPermission = "system.roles"
+
 type Service struct {
 	RoleRepository       *Repository
 	PermissionRepository *permission.Repository
-	// AuthorizationCache 为 nil 时（未启用登录）跳过鉴权缓存失效。
-	AuthorizationCache authorization.Invalidator
+	// Authorizer 判断当前用户能否调用管理方法；为 nil 时（未启用登录）管理方法一律拒绝，缓存失效直接跳过。
+	Authorizer *authorization.Authorizer
 }
 
-func NewService(roleRepository *Repository, permissionRepository *permission.Repository) *Service {
-	return &Service{RoleRepository: roleRepository, PermissionRepository: permissionRepository}
+func NewService(roleRepository *Repository, permissionRepository *permission.Repository, authorizer *authorization.Authorizer) *Service {
+	return &Service{RoleRepository: roleRepository, PermissionRepository: permissionRepository, Authorizer: authorizer}
 }
 
 // invalidateAuthorization 角色变更可能影响任意用户，删除所有用户的权限缓存。
 // 新建角色也需要失效：被删除的角色 code 可能仍留在用户的 roles 中，重建同 code 角色会让这些用户获得权限。
 func (roleService *Service) invalidateAuthorization(ctx context.Context) error {
-	if roleService.AuthorizationCache == nil {
-		return nil
-	}
-	if err := roleService.AuthorizationCache.InvalidateAllUsers(ctx); err != nil {
-		return authorization.CacheRefreshError(err)
-	}
-	return nil
+	return roleService.Authorizer.InvalidateAllUsers(ctx)
 }
 
 func (roleService *Service) Create(ctx context.Context, requestBody *CreateRequest) (*Role, error) {
+	if err := roleService.Authorizer.Require(ctx, managementPermission); err != nil {
+		return nil, err
+	}
 	code, err := validation.RequireText("code", requestBody.Code)
 	if err != nil {
 		return nil, err
@@ -78,11 +78,17 @@ func (roleService *Service) Create(ctx context.Context, requestBody *CreateReque
 }
 
 func (roleService *Service) Get(ctx context.Context, id int64) (*Role, error) {
+	if err := roleService.Authorizer.Require(ctx, managementPermission); err != nil {
+		return nil, err
+	}
 	record, err := roleService.RoleRepository.Get(ctx, id)
 	return record, translateError(err)
 }
 
 func (roleService *Service) List(ctx context.Context, query *pagination.KeywordQuery) ([]Role, int64, error) {
+	if err := roleService.Authorizer.Require(ctx, managementPermission); err != nil {
+		return nil, 0, err
+	}
 	if err := query.Validate(); err != nil {
 		return nil, 0, err
 	}
@@ -91,6 +97,9 @@ func (roleService *Service) List(ctx context.Context, query *pagination.KeywordQ
 }
 
 func (roleService *Service) Update(ctx context.Context, id int64, requestBody *UpdateRequest) (*Role, error) {
+	if err := roleService.Authorizer.Require(ctx, managementPermission); err != nil {
+		return nil, err
+	}
 	changes := make(map[string]any)
 	if requestBody.Name != nil {
 		name, err := validation.RequireText("name", *requestBody.Name)
@@ -123,6 +132,9 @@ func (roleService *Service) Update(ctx context.Context, id int64, requestBody *U
 }
 
 func (roleService *Service) Delete(ctx context.Context, id int64) error {
+	if err := roleService.Authorizer.Require(ctx, managementPermission); err != nil {
+		return err
+	}
 	if err := roleService.RoleRepository.Delete(ctx, id); err != nil {
 		return translateError(err)
 	}
