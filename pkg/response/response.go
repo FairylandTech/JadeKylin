@@ -22,6 +22,8 @@ import (
 	"jkylin.com/kylin/v2/pkg/logger"
 )
 
+const defaultMessage = "ok"
+
 type Pagination struct {
 	Page  int   `json:"page"`
 	Size  int   `json:"size"`
@@ -39,19 +41,20 @@ type Response struct {
 	Duration  int64  `json:"duration"` // 处理耗时（毫秒）
 }
 
+// Wrapper 补全 trace id、时间戳、耗时后输出统一响应。
 func Wrapper(ctx *gin.Context, httpStatus int, response *Response) {
 	response.TraceID = ctx.GetString(consts.TraceKey)
 	now := time.Now()
 	if response.Timestamp == 0 {
 		response.Timestamp = now.UnixMilli()
 	}
-	if start, ok := ctx.Get(consts.RequestTimestamp); ok {
-		if t, ok := start.(time.Time); ok {
-			response.Duration = now.Sub(t).Milliseconds()
+	if requestTimestamp, ok := ctx.Get(consts.RequestTimestamp); ok {
+		if startedAt, ok := requestTimestamp.(time.Time); ok {
+			response.Duration = now.Sub(startedAt).Milliseconds()
 		}
 	}
 	if response.Message == "" {
-		response.Message = "ok"
+		response.Message = defaultMessage
 	}
 
 	if response.TraceID != "" {
@@ -74,20 +77,20 @@ func Page(ctx *gin.Context, data any, page, size int, total int64) {
 
 // FailSkip 同 Fail，skip 用于修正日志中的调用位置（被封装调用时 +1）。
 func FailSkip(ctx *gin.Context, err error, skip int) {
-	e := errcode.From(err)
-	if e == nil {
-		e = errcode.Internal
+	codeError := errcode.From(err)
+	if codeError == nil {
+		codeError = errcode.Internal
 	}
 
-	log := logger.FromContext(ctx.Request.Context()).WithOptions(zap.AddCallerSkip(skip))
-	if e.HTTPStatus >= 500 {
-		log.Error("request failed", zap.Int("code", e.Code), zap.Error(err))
+	requestLogger := logger.FromContext(ctx.Request.Context()).WithOptions(zap.AddCallerSkip(skip))
+	if codeError.HTTPStatus >= 500 {
+		requestLogger.Error("request failed", zap.Int("code", codeError.Code), zap.Error(err))
 	} else {
-		log.Warn("request failed", zap.Int("code", e.Code), zap.Error(err))
+		requestLogger.Warn("request failed", zap.Int("code", codeError.Code), zap.Error(err))
 	}
 
 	_ = ctx.Error(err) // 记录到 gin 的错误列表，供访问日志使用
-	Wrapper(ctx, e.HTTPStatus, &Response{Code: e.Code, Message: e.Message})
+	Wrapper(ctx, codeError.HTTPStatus, &Response{Code: codeError.Code, Message: codeError.Message})
 }
 
 // Fail 错误响应。*errcode.Error 原样输出；其它错误统一视为 500，
@@ -104,8 +107,8 @@ func Abort(ctx *gin.Context, err error) {
 
 // AbortSilently 输出错误响应并终止，但不打日志（调用方已自行记录）。
 func AbortSilently(ctx *gin.Context, err error) {
-	e := errcode.From(err)
+	codeError := errcode.From(err)
 	_ = ctx.Error(err)
-	Wrapper(ctx, e.HTTPStatus, &Response{Code: e.Code, Message: e.Message})
+	Wrapper(ctx, codeError.HTTPStatus, &Response{Code: codeError.Code, Message: codeError.Message})
 	ctx.Abort()
 }

@@ -18,17 +18,21 @@ import (
 	"math/big"
 )
 
+// Length 是验证码的位数。
 const Length = 4
+
+// digitCount 是单个验证码字符的取值个数（0-9）。
+const digitCount = 10
 
 // NewCode 生成 Length 位随机数字。
 func NewCode() (string, error) {
 	code := make([]byte, Length)
-	for i := range code {
-		n, err := rand.Int(rand.Reader, big.NewInt(10))
+	for index := range code {
+		digit, err := rand.Int(rand.Reader, big.NewInt(digitCount))
 		if err != nil {
 			return "", err
 		}
-		code[i] = byte('0' + n.Int64())
+		code[index] = byte('0' + digit.Int64())
 	}
 	return string(code), nil
 }

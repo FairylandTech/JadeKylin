@@ -28,31 +28,31 @@ import (
 )
 
 // Recovery 捕获 panic，记录堆栈并返回统一 500 响应。
-func (m *Middleware) Recovery() gin.HandlerFunc {
+func (globalMiddleware *Middleware) Recovery() gin.HandlerFunc {
 	return func(ctx *gin.Context) {
 		defer func() {
-			rec := recover()
-			if rec == nil {
+			recovered := recover()
+			if recovered == nil {
 				return
 			}
 			// http.ErrAbortHandler 是标准库约定的“静默中断”，继续向上抛出
-			if rec == http.ErrAbortHandler {
-				panic(rec)
+			if recovered == http.ErrAbortHandler {
+				panic(recovered)
 			}
 
-			log := logger.FromContext(ctx.Request.Context())
+			requestLogger := logger.FromContext(ctx.Request.Context())
 
-			if isBrokenPipe(rec) {
-				log.Warn("client connection broken",
-					zap.Any("error", rec),
+			if isBrokenPipe(recovered) {
+				requestLogger.Warn("client connection broken",
+					zap.Any("error", recovered),
 					zap.String("path", ctx.Request.URL.Path))
-				_ = ctx.Error(fmt.Errorf("%v", rec))
+				_ = ctx.Error(fmt.Errorf("%v", recovered))
 				ctx.Abort()
 				return
 			}
 
-			log.Error("panic recovered",
-				zap.Any("error", rec),
+			requestLogger.Error("panic recovered",
+				zap.Any("error", recovered),
 				zap.String("method", ctx.Request.Method),
 				zap.String("path", ctx.Request.URL.Path),
 				zap.Stack("stack"),
@@ -63,23 +63,23 @@ func (m *Middleware) Recovery() gin.HandlerFunc {
 				return
 			}
 			// 上面已记录含堆栈的日志，这里不再重复记录
-			response.AbortSilently(ctx, errcode.Internal.Wrap(fmt.Errorf("panic: %v", rec)))
+			response.AbortSilently(ctx, errcode.Internal.Wrap(fmt.Errorf("panic: %v", recovered)))
 		}()
 		ctx.Next()
 	}
 }
 
-func isBrokenPipe(rec any) bool {
-	err, ok := rec.(error)
+func isBrokenPipe(recovered any) bool {
+	err, ok := recovered.(error)
 	if !ok {
 		return false
 	}
-	var opErr *net.OpError
-	if errors.As(err, &opErr) {
-		var sysErr *os.SyscallError
-		if errors.As(opErr, &sysErr) {
-			msg := strings.ToLower(sysErr.Error())
-			return strings.Contains(msg, "broken pipe") || strings.Contains(msg, "connection reset by peer")
+	var operationError *net.OpError
+	if errors.As(err, &operationError) {
+		var systemCallError *os.SyscallError
+		if errors.As(operationError, &systemCallError) {
+			message := strings.ToLower(systemCallError.Error())
+			return strings.Contains(message, "broken pipe") || strings.Contains(message, "connection reset by peer")
 		}
 	}
 	return false

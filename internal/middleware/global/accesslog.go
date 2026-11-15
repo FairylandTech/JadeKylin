@@ -23,10 +23,10 @@ import (
 
 // AccessLog 访问日志：请求结束后按状态码分级输出（5xx=error, 4xx=warn, 其它=info）。
 // 依赖 Trace 中间件注入的 Logger
-func (m *Middleware) AccessLog() gin.HandlerFunc {
-	skip := make(map[string]struct{}, len(m.cfg.Log.SkipPaths))
-	for _, p := range m.cfg.Log.SkipPaths {
-		skip[p] = struct{}{}
+func (globalMiddleware *Middleware) AccessLog() gin.HandlerFunc {
+	skippedPaths := make(map[string]struct{}, len(globalMiddleware.configuration.Log.SkipPaths))
+	for _, skippedPath := range globalMiddleware.configuration.Log.SkipPaths {
+		skippedPaths[skippedPath] = struct{}{}
 	}
 
 	return func(ctx *gin.Context) {
@@ -36,7 +36,7 @@ func (m *Middleware) AccessLog() gin.HandlerFunc {
 
 		ctx.Next()
 
-		if _, ok := skip[path]; ok {
+		if _, ok := skippedPaths[path]; ok {
 			return
 		}
 
@@ -57,14 +57,14 @@ func (m *Middleware) AccessLog() gin.HandlerFunc {
 		}
 
 		// 访问日志不需要堆栈（panic 堆栈由 Recovery 记录）
-		log := logger.FromContext(ctx.Request.Context()).WithOptions(zap.AddStacktrace(zapcore.FatalLevel))
+		accessLogger := logger.FromContext(ctx.Request.Context()).WithOptions(zap.AddStacktrace(zapcore.FatalLevel))
 		switch {
 		case status >= 500:
-			log.Error("access", fields...)
+			accessLogger.Error("access", fields...)
 		case status >= 400:
-			log.Warn("access", fields...)
+			accessLogger.Warn("access", fields...)
 		default:
-			log.Info("access", fields...)
+			accessLogger.Info("access", fields...)
 		}
 	}
 }

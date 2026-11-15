@@ -20,26 +20,30 @@ import (
 	"testing"
 
 	"gorm.io/gorm"
-	"jkylin.com/kylin/v2/internal/contracts/requests"
-	"jkylin.com/kylin/v2/internal/model"
+	"jkylin.com/kylin/v2/internal/module/apipermission"
+	"jkylin.com/kylin/v2/internal/module/user"
 	"jkylin.com/kylin/v2/internal/router"
 )
 
-func verifyLoginFlow(t *testing.T, db *gorm.DB) {
+func verifyLoginFlow(t *testing.T, database *gorm.DB) {
 	t.Helper()
-	server := newTestServer(t, db)
+	server := newTestServer(t, database)
 	call := func(method, path, header, body string, want int) *httptest.ResponseRecorder {
 		t.Helper()
-		res := request(server.engine, method, path, header, body)
-		assertStatus(t, res, want)
-		return res
+		recorder := request(server.engine, method, path, header, body)
+		assertStatus(t, recorder, want)
+		return recorder
 	}
-	loginBody := func(username, password string) string { return server.loginBody(t, username, password) }
-	login := func(username, password string) string { return server.login(t, username, password) }
+	loginBody := func(username, password string) string {
+		return server.loginBody(t, username, password)
+	}
+	login := func(username, password string) string {
+		return server.login(t, username, password)
+	}
 	admin := server.admin(t)
 
-	user := decodeData[model.User](t, call(http.MethodPost, "/users", admin, `{"username":"login-user","password":"login-password"}`, http.StatusOK))
-	userPath := "/users/" + strconv.FormatInt(user.ID, 10)
+	createdUser := decodeData[user.User](t, call(http.MethodPost, "/users", admin, `{"username":"login-user","password":"login-password"}`, http.StatusOK))
+	userPath := "/users/" + strconv.FormatInt(createdUser.ID, 10)
 
 	call(http.MethodPost, "/auth/login", "", `{"username":"login-user","password":"login-password"}`, http.StatusBadRequest)
 	call(http.MethodPost, "/auth/login", "", `{"username":"login-user","password":"login-password","captcha_id":"x","captcha_code":"12a4"}`, http.StatusBadRequest)
@@ -47,9 +51,9 @@ func verifyLoginFlow(t *testing.T, db *gorm.DB) {
 	call(http.MethodPost, "/auth/login", "", loginBody("no-such-user", "login-password"), http.StatusUnauthorized)
 
 	first := login("login-user", "login-password")
-	meRes := call(http.MethodGet, "/auth/me", first, "", http.StatusOK)
-	if me := decodeData[model.User](t, meRes); me.ID != user.ID || strings.Contains(meRes.Body.String(), `"password":`) {
-		t.Fatalf("unexpected me: %s", meRes.Body.String())
+	meRecorder := call(http.MethodGet, "/auth/me", first, "", http.StatusOK)
+	if me := decodeData[user.User](t, meRecorder); me.ID != createdUser.ID || strings.Contains(meRecorder.Body.String(), `"password":`) {
+		t.Fatalf("unexpected me: %s", meRecorder.Body.String())
 	}
 
 	// RBAC：没有 system.users / system.roles 的用户访问管理接口返回 403；授权后同一个 token 立即可用。
@@ -66,11 +70,11 @@ func verifyLoginFlow(t *testing.T, db *gorm.DB) {
 	call(http.MethodGet, "/users", first, "", http.StatusForbidden)
 
 	// 接口放行权限可直接修改且立即生效：把 GET /users 改为 logs.view 后，拥有 auditor（含 logs.view）的用户可以访问。
-	apiPermissions := decodeData[[]model.ApiPermission](t, call(http.MethodGet, "/api-permissions", admin, "", http.StatusOK))
-	var listUsers *model.ApiPermission
-	for i := range apiPermissions {
-		if apiPermissions[i].Method == http.MethodGet && apiPermissions[i].Path == "/users" {
-			listUsers = &apiPermissions[i]
+	apiPermissions := decodeData[[]apipermission.ApiPermission](t, call(http.MethodGet, "/api-permissions", admin, "", http.StatusOK))
+	var listUsers *apipermission.ApiPermission
+	for index := range apiPermissions {
+		if apiPermissions[index].Method == http.MethodGet && apiPermissions[index].Path == "/users" {
+			listUsers = &apiPermissions[index]
 		}
 	}
 	if listUsers == nil || listUsers.Permission != "system.users" || len(apiPermissions) < 15 {
@@ -82,7 +86,7 @@ func verifyLoginFlow(t *testing.T, db *gorm.DB) {
 	call(http.MethodPut, listUsersPath, admin, `{}`, http.StatusBadRequest)
 	call(http.MethodPut, "/api-permissions/999999", admin, `{"permission":"logs.view"}`, http.StatusNotFound)
 	call(http.MethodPut, userPath, admin, `{"roles":["auditor"]}`, http.StatusOK)
-	changed := decodeData[model.ApiPermission](t, call(http.MethodPut, listUsersPath, admin, `{"permission":"logs.view"}`, http.StatusOK))
+	changed := decodeData[apipermission.ApiPermission](t, call(http.MethodPut, listUsersPath, admin, `{"permission":"logs.view"}`, http.StatusOK))
 	if changed.Permission != "logs.view" || changed.Path != "/users" {
 		t.Fatalf("unexpected changed api permission: %+v", changed)
 	}
@@ -92,7 +96,7 @@ func verifyLoginFlow(t *testing.T, db *gorm.DB) {
 	if permission := server.redis.HGet("kylin:authz:api", "GET /users"); permission != "logs.view" {
 		t.Fatalf("api permission cache not synced: %q", permission)
 	}
-	if ok, _ := server.redis.SIsMember("kylin:authz:user:"+strconv.FormatInt(user.ID, 10), "logs.view"); !ok {
+	if ok, _ := server.redis.SIsMember("kylin:authz:user:"+strconv.FormatInt(createdUser.ID, 10), "logs.view"); !ok {
 		t.Fatal("user permissions should be cached in Redis")
 	}
 	// Redis 中的接口表被清空（如 Redis 重启）时自动从数据库重新同步。
@@ -115,7 +119,7 @@ func verifyLoginFlow(t *testing.T, db *gorm.DB) {
 	afterChange := login("login-user", "self-password")
 
 	// 管理员重置密码 → 所有设备下线。
-	reset := decodeData[requests.ResetPasswordResponse](t, call(http.MethodPost, userPath+"/password/reset", admin, "", http.StatusOK))
+	reset := decodeData[user.ResetPasswordResponse](t, call(http.MethodPost, userPath+"/password/reset", admin, "", http.StatusOK))
 	call(http.MethodGet, "/auth/me", afterChange, "", http.StatusUnauthorized)
 	call(http.MethodPost, "/auth/login", "", loginBody("login-user", "self-password"), http.StatusUnauthorized)
 
@@ -142,16 +146,16 @@ func verifyLoginFlow(t *testing.T, db *gorm.DB) {
 }
 
 // verifyLocalAuth：RUN_MODE=local/dev 时不带 token 的请求以初始管理员身份访问，带 token 仍按 token 中的用户鉴权。
-func verifyLocalAuth(t *testing.T, db *gorm.DB) {
+func verifyLocalAuth(t *testing.T, database *gorm.DB) {
 	t.Helper()
-	server := newTestServerWith(t, db, router.Dependencies{SkipAuth: true, LocalUsername: testAdminUsername})
+	server := newTestServerWith(t, database, router.Dependencies{SkipAuth: true, LocalUsername: testAdminUsername})
 	call := func(method, path, header, body string, want int) *httptest.ResponseRecorder {
 		t.Helper()
-		res := request(server.engine, method, path, header, body)
-		assertStatus(t, res, want)
-		return res
+		recorder := request(server.engine, method, path, header, body)
+		assertStatus(t, recorder, want)
+		return recorder
 	}
-	if me := decodeData[model.User](t, call(http.MethodGet, "/auth/me", "", "", http.StatusOK)); me.Username != testAdminUsername {
+	if me := decodeData[user.User](t, call(http.MethodGet, "/auth/me", "", "", http.StatusOK)); me.Username != testAdminUsername {
 		t.Fatalf("local auth should act as admin: %+v", me)
 	}
 	call(http.MethodGet, "/users", "", "", http.StatusOK)
@@ -163,6 +167,6 @@ func verifyLocalAuth(t *testing.T, db *gorm.DB) {
 	call(http.MethodGet, "/users", "Bearer bad", "", http.StatusUnauthorized)
 
 	// 默认用户不存在时返回 401 并提示如何创建。
-	missing := newTestServerWith(t, db, router.Dependencies{SkipAuth: true, LocalUsername: "no-such-admin"})
+	missing := newTestServerWith(t, database, router.Dependencies{SkipAuth: true, LocalUsername: "no-such-admin"})
 	assertStatus(t, request(missing.engine, http.MethodGet, "/users", "", ""), http.StatusUnauthorized)
 }

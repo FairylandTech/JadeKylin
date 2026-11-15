@@ -22,24 +22,26 @@ import (
 
 func TestLoadRedis(t *testing.T) {
 	previous := *config.Get()
-	t.Cleanup(func() { *config.Get() = previous })
+	t.Cleanup(func() {
+		*config.Get() = previous
+	})
 	path := filepath.Join(t.TempDir(), "config.yaml")
 	if err := os.WriteFile(path, []byte("redis:\n  enabled: true\n  url: redis://localhost:6379/1\n  pool_size: 20\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("KYLIN_REDIS_URL", "redis://localhost:6379/2")
-	cfg, err := config.Load(path)
+	configuration, err := config.Load(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !cfg.Redis.Enabled || cfg.Redis.URL != "redis://localhost:6379/2" || cfg.Redis.PoolSize != 20 || cfg.Redis.ConnectTimeout != 5 {
+	if !configuration.Redis.Enabled || configuration.Redis.URL != "redis://localhost:6379/2" || configuration.Redis.PoolSize != 20 || configuration.Redis.ConnectTimeout != 5 {
 		t.Fatal("unexpected redis config")
 	}
-	cfg, err = config.Load(filepath.Join(t.TempDir(), "missing.yaml"))
+	configuration, err = config.Load(filepath.Join(t.TempDir(), "missing.yaml"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.Redis.Enabled || cfg.Redis.PoolSize != 10 {
+	if configuration.Redis.Enabled || configuration.Redis.PoolSize != 10 {
 		t.Fatal("previous config leaked into defaults")
 	}
 }

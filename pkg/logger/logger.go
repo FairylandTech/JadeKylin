@@ -26,11 +26,30 @@ import (
 	"gopkg.in/natefinch/lumberjack.v2"
 )
 
+// 未配置时使用的默认值。
+const (
+	defaultLevel           = "info"
+	defaultStacktraceLevel = "error"
+	defaultOutput          = "stdout"
+	defaultDirectory       = "logs"
+	defaultFilename        = "app.log"
+	defaultMaxSize         = 100 // 日志文件最大 100 MB
+	defaultMaxBackups      = 7   // 最多保留 7 个旧文件
+	defaultMaxAge          = 30  // 最多保留 30 天
+)
+
+// 日志输出位置。
+const (
+	outputStdout = "stdout"
+	outputFile   = "file"
+	outputBoth   = "both"
+)
+
 type Options struct {
 	Level      string // debug | info | warn | error | dpanic | panic | fatal
 	Format     string // console | json
 	Output     string // stdout | file | both
-	Dir        string // 日志目录
+	Directory  string // 日志目录
 	Filename   string // 日志文件名
 	MaxSize    int    // 单个文件最大尺寸（MB）
 	MaxBackups int    // 最多保留的旧文件个数
@@ -40,45 +59,45 @@ type Options struct {
 	Stacktrace string // 达到该级别时输出堆栈，默认 error
 }
 
-type ctxKey struct{}
+type loggerContextKey struct{}
 
-type traceIDKey struct{}
+type traceIDContextKey struct{}
 
 var (
-	mu     sync.RWMutex           // 保护全局 logger 的读写锁
-	global *zap.Logger            // 全局 logger
-	sugar  *zap.SugaredLogger     // 全局 SugaredLogger
-	level  = zap.NewAtomicLevel() // 全局日志级别
+	mutex         sync.RWMutex           // 保护全局 logger 的读写锁
+	globalLogger  *zap.Logger            // 全局 logger
+	sugaredLogger *zap.SugaredLogger     // 全局 SugaredLogger
+	atomicLevel   = zap.NewAtomicLevel() // 全局日志级别
 )
 
-// defaultStr 返回 v 或默认值 def（v 为空字符串时返回 def）。
-func defaultStr(v, def string) string {
-	if strings.TrimSpace(v) == "" {
-		return def
+// defaultString 返回 value 或默认值 fallback（value 为空字符串时返回 fallback）。
+func defaultString(value, fallback string) string {
+	if strings.TrimSpace(value) == "" {
+		return fallback
 	}
-	return v
+	return value
 }
 
-// defaultInt 返回 v 或默认值 def（v 小于等于 0 时返回 def）。
-func defaultInt(v, def int) int {
-	if v <= 0 {
-		return def
+// defaultInteger 返回 value 或默认值 fallback（value 小于等于 0 时返回 fallback）。
+func defaultInteger(value, fallback int) int {
+	if value <= 0 {
+		return fallback
 	}
-	return v
+	return value
 }
 
 // replace 替换全局 logger。
-func replace(l *zap.Logger) {
-	mu.Lock()
-	defer mu.Unlock()
-	global = l
-	sugar = l.Sugar()
-	zap.ReplaceGlobals(l)
+func replace(replacement *zap.Logger) {
+	mutex.Lock()
+	defer mutex.Unlock()
+	globalLogger = replacement
+	sugaredLogger = replacement.Sugar()
+	zap.ReplaceGlobals(replacement)
 }
 
 // newEncoder 创建日志编码器。
 func newEncoder(format string, color bool) zapcore.Encoder {
-	cfg := zapcore.EncoderConfig{
+	encoderConfiguration := zapcore.EncoderConfig{
 		TimeKey:        "time",
 		LevelKey:       "level",
 		NameKey:        "logger",
@@ -93,42 +112,42 @@ func newEncoder(format string, color bool) zapcore.Encoder {
 		EncodeCaller:   zapcore.ShortCallerEncoder,
 	}
 	if strings.ToLower(format) == "json" {
-		cfg.EncodeTime = zapcore.ISO8601TimeEncoder
-		return zapcore.NewJSONEncoder(cfg)
+		encoderConfiguration.EncodeTime = zapcore.ISO8601TimeEncoder
+		return zapcore.NewJSONEncoder(encoderConfiguration)
 	}
 	if color {
-		cfg.EncodeLevel = zapcore.CapitalColorLevelEncoder
+		encoderConfiguration.EncodeLevel = zapcore.CapitalColorLevelEncoder
 	}
-	return zapcore.NewConsoleEncoder(cfg)
+	return zapcore.NewConsoleEncoder(encoderConfiguration)
 }
 
 // SetLevel 设置全局日志级别。
-func SetLevel(l string) error {
-	lvl, err := zapcore.ParseLevel(l)
+func SetLevel(levelName string) error {
+	level, err := zapcore.ParseLevel(levelName)
 	if err != nil {
 		return err
 	}
-	level.SetLevel(lvl)
+	atomicLevel.SetLevel(level)
 	return nil
 }
 
-// L 返回全局 logger。
-func L() *zap.Logger {
-	mu.RLock()
-	defer mu.RUnlock()
-	return global
+// Global 返回全局 logger。
+func Global() *zap.Logger {
+	mutex.RLock()
+	defer mutex.RUnlock()
+	return globalLogger
 }
 
-// S 返回全局 SugaredLogger。
-func S() *zap.SugaredLogger {
-	mu.RLock()
-	defer mu.RUnlock()
-	return sugar
+// Sugared 返回全局 SugaredLogger。
+func Sugared() *zap.SugaredLogger {
+	mutex.RLock()
+	defer mutex.RUnlock()
+	return sugaredLogger
 }
 
 // Sync 刷新缓冲区，确保日志写入磁盘。
 func Sync() error {
-	err := L().Sync()
+	err := Global().Sync()
 	if err != nil && (strings.Contains(err.Error(), "invalid argument") ||
 		strings.Contains(err.Error(), "inappropriate ioctl")) {
 		return nil
@@ -137,13 +156,13 @@ func Sync() error {
 }
 
 // NewContext 返回附带 logger 的新 context。
-func NewContext(ctx context.Context, l *zap.Logger) context.Context {
-	return context.WithValue(ctx, ctxKey{}, l)
+func NewContext(ctx context.Context, contextLogger *zap.Logger) context.Context {
+	return context.WithValue(ctx, loggerContextKey{}, contextLogger)
 }
 
 // WithTraceID 返回附带 trace id 的新 context。
 func WithTraceID(ctx context.Context, traceID string) context.Context {
-	return context.WithValue(ctx, traceIDKey{}, traceID)
+	return context.WithValue(ctx, traceIDContextKey{}, traceID)
 }
 
 // TraceID 从 context 中取出 trace id；不存在时返回空字符串。
@@ -151,92 +170,93 @@ func TraceID(ctx context.Context) string {
 	if ctx == nil {
 		return ""
 	}
-	traceID, _ := ctx.Value(traceIDKey{}).(string)
+	traceID, _ := ctx.Value(traceIDContextKey{}).(string)
 	return traceID
 }
 
 // FromContext 从 context 中获取 logger；若不存在则返回全局 logger。
 func FromContext(ctx context.Context) *zap.Logger {
 	if ctx != nil {
-		if l, ok := ctx.Value(ctxKey{}).(*zap.Logger); ok && l != nil {
-			return l
+		if contextLogger, ok := ctx.Value(loggerContextKey{}).(*zap.Logger); ok && contextLogger != nil {
+			return contextLogger
 		}
 	}
-	return L()
+	return Global()
 }
 
-func Debug(msg string, fields ...zap.Field) {
-	L().WithOptions(zap.AddCallerSkip(1)).Debug(msg, fields...)
+func Debug(message string, fields ...zap.Field) {
+	Global().WithOptions(zap.AddCallerSkip(1)).Debug(message, fields...)
 }
 
-func Info(msg string, fields ...zap.Field) {
-	L().WithOptions(zap.AddCallerSkip(1)).Info(msg, fields...)
+func Info(message string, fields ...zap.Field) {
+	Global().WithOptions(zap.AddCallerSkip(1)).Info(message, fields...)
 }
 
-func Warn(msg string, fields ...zap.Field) {
-	L().WithOptions(zap.AddCallerSkip(1)).Warn(msg, fields...)
+func Warn(message string, fields ...zap.Field) {
+	Global().WithOptions(zap.AddCallerSkip(1)).Warn(message, fields...)
 }
 
-func Error(msg string, fields ...zap.Field) {
-	L().WithOptions(zap.AddCallerSkip(1)).Error(msg, fields...)
+func Error(message string, fields ...zap.Field) {
+	Global().WithOptions(zap.AddCallerSkip(1)).Error(message, fields...)
 }
 
-func Fatal(msg string, fields ...zap.Field) {
-	L().WithOptions(zap.AddCallerSkip(1)).Fatal(msg, fields...)
+func Fatal(message string, fields ...zap.Field) {
+	Global().WithOptions(zap.AddCallerSkip(1)).Fatal(message, fields...)
 }
 
 func init() {
-	log, _ := zap.NewDevelopment()
-	replace(log)
+	developmentLogger, _ := zap.NewDevelopment()
+	replace(developmentLogger)
 }
 
-func Init(opts Options) error {
-	lvl, err := zapcore.ParseLevel(defaultStr(opts.Level, "info")) // 设置默认日志级别为 info
+// Initialize 按配置创建并替换全局 logger。
+func Initialize(options Options) error {
+	level, err := zapcore.ParseLevel(defaultString(options.Level, defaultLevel)) // 设置默认日志级别为 info
 	if err != nil {
-		return fmt.Errorf("logger: invalid level %q: %w", opts.Level, err)
+		return fmt.Errorf("logger: invalid level %q: %w", options.Level, err)
 	}
-	level.SetLevel(lvl)
+	atomicLevel.SetLevel(level)
 
-	stackLvl, err := zapcore.ParseLevel(defaultStr(opts.Stacktrace, "error")) // 设置默认堆栈输出级别为 error
+	stacktraceLevel, err := zapcore.ParseLevel(defaultString(options.Stacktrace, defaultStacktraceLevel)) // 设置默认堆栈输出级别为 error
 	if err != nil {
-		return fmt.Errorf("logger: invalid stacktrace level %q: %w", opts.Stacktrace, err)
+		return fmt.Errorf("logger: invalid stacktrace level %q: %w", options.Stacktrace, err)
 	}
 
 	var cores []zapcore.Core
-	output := strings.ToLower(defaultStr(opts.Output, "stdout")) // 设置默认输出为 stdout
+	output := strings.ToLower(defaultString(options.Output, defaultOutput)) // 设置默认输出为 stdout
 
-	if output == "stdout" || output == "both" {
+	if output == outputStdout || output == outputBoth {
 		// 控制台：console 格式下启用彩色级别
-		enc := newEncoder(opts.Format, true)
-		cores = append(cores, zapcore.NewCore(enc, zapcore.Lock(os.Stdout), level))
+		encoder := newEncoder(options.Format, true)
+		cores = append(cores, zapcore.NewCore(encoder, zapcore.Lock(os.Stdout), atomicLevel))
 	}
-	if output == "file" || output == "both" {
-		dir := defaultStr(opts.Dir, "logs")
-		if err := os.MkdirAll(dir, 0o755); err != nil {
+	if output == outputFile || output == outputBoth {
+		directory := defaultString(options.Directory, defaultDirectory)
+		if err := os.MkdirAll(directory, 0o755); err != nil {
 			return fmt.Errorf("logger: create log dir: %w", err)
 		}
 		writer := &lumberjack.Logger{
-			Filename:   filepath.Join(dir, defaultStr(opts.Filename, "app.log")),
-			MaxSize:    defaultInt(opts.MaxSize, 100),  // 日志文件最大 100 MB
-			MaxBackups: defaultInt(opts.MaxBackups, 7), // 最多保留 7 个旧文件
-			MaxAge:     defaultInt(opts.MaxAge, 30),    // 最多保留 30 天
-			Compress:   opts.Compress,
+			Filename:   filepath.Join(directory, defaultString(options.Filename, defaultFilename)),
+			MaxSize:    defaultInteger(options.MaxSize, defaultMaxSize),
+			MaxBackups: defaultInteger(options.MaxBackups, defaultMaxBackups),
+			MaxAge:     defaultInteger(options.MaxAge, defaultMaxAge),
+			Compress:   options.Compress,
 			LocalTime:  true,
 		}
 		// 文件：不使用彩色
-		enc := newEncoder(opts.Format, false)
-		cores = append(cores, zapcore.NewCore(enc, zapcore.AddSync(writer), level))
+		encoder := newEncoder(options.Format, false)
+		cores = append(cores, zapcore.NewCore(encoder, zapcore.AddSync(writer), atomicLevel))
 	}
 	if len(cores) == 0 {
-		return fmt.Errorf("logger: invalid output %q, want stdout|file|both", opts.Output)
+		return fmt.Errorf("logger: invalid output %q, want stdout|file|both", options.Output)
 	}
 
-	zopts := []zap.Option{zap.AddStacktrace(stackLvl)} // 设置堆栈输出级别
-	if opts.Caller {
+	zapOptions := []zap.Option{zap.AddStacktrace(stacktraceLevel)} // 设置堆栈输出级别
+	if options.Caller {
 		// 设置调用位置输出
-		zopts = append(zopts, zap.AddCaller())
+		zapOptions = append(zapOptions, zap.AddCaller())
 	}
 
-	replace(zap.New(zapcore.NewTee(cores...), zopts...)) // 替换全局 logger
+	replace(zap.New(zapcore.NewTee(cores...), zapOptions...)) // 替换全局 logger
 	return nil
 }

@@ -21,14 +21,14 @@ import (
 )
 
 // CORS 跨域处理。allow_origins 包含 "*" 时允许任意来源。
-func (m *Middleware) CORS() gin.HandlerFunc {
+func (globalMiddleware *Middleware) CORS() gin.HandlerFunc {
 	allowAll := false
-	allowed := make(map[string]struct{}, len(m.cfg.CORS.AllowOrigins))
-	for _, o := range m.cfg.CORS.AllowOrigins {
-		if o == "*" {
+	allowedOrigins := make(map[string]struct{}, len(globalMiddleware.configuration.CORS.AllowOrigins))
+	for _, allowedOrigin := range globalMiddleware.configuration.CORS.AllowOrigins {
+		if allowedOrigin == "*" {
 			allowAll = true
 		}
-		allowed[strings.TrimRight(o, "/")] = struct{}{}
+		allowedOrigins[strings.TrimRight(allowedOrigin, "/")] = struct{}{}
 	}
 
 	return func(ctx *gin.Context) {
@@ -38,13 +38,13 @@ func (m *Middleware) CORS() gin.HandlerFunc {
 			return
 		}
 
-		h := ctx.Writer.Header()
-		h.Add("Vary", "Origin")
+		header := ctx.Writer.Header()
+		header.Add("Vary", "Origin")
 		if allowAll {
-			h.Set("Access-Control-Allow-Origin", "*")
-		} else if _, ok := allowed[origin]; ok {
-			h.Set("Access-Control-Allow-Origin", origin)
-			h.Set("Access-Control-Allow-Credentials", "true")
+			header.Set("Access-Control-Allow-Origin", "*")
+		} else if _, ok := allowedOrigins[origin]; ok {
+			header.Set("Access-Control-Allow-Origin", origin)
+			header.Set("Access-Control-Allow-Credentials", "true")
 		} else if ctx.Request.Method == http.MethodOptions {
 			ctx.AbortWithStatus(http.StatusForbidden)
 			return
@@ -53,12 +53,12 @@ func (m *Middleware) CORS() gin.HandlerFunc {
 			return
 		}
 
-		h.Set("Access-Control-Expose-Headers", consts.TraceHeader+","+consts.AccessTokenHeader)
+		header.Set("Access-Control-Expose-Headers", consts.TraceHeader+","+consts.AccessTokenHeader)
 
 		if ctx.Request.Method == http.MethodOptions {
-			h.Set("Access-Control-Allow-Methods", "GET,POST,PUT,PATCH,DELETE,OPTIONS")
-			h.Set("Access-Control-Allow-Headers", "Origin,Content-Type,Accept,Authorization,"+consts.TraceHeader)
-			h.Set("Access-Control-Max-Age", "86400")
+			header.Set("Access-Control-Allow-Methods", "GET,POST,PUT,PATCH,DELETE,OPTIONS")
+			header.Set("Access-Control-Allow-Headers", "Origin,Content-Type,Accept,Authorization,"+consts.TraceHeader)
+			header.Set("Access-Control-Max-Age", "86400")
 			ctx.AbortWithStatus(http.StatusNoContent)
 			return
 		}

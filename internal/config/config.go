@@ -23,18 +23,29 @@ import (
 	"jkylin.com/kylin/v2/pkg/consts"
 )
 
+const (
+	// minimumJWTSecretBytes 是 JWT 密钥的最小长度。
+	minimumJWTSecretBytes = 32
+
+	modeDebug   = "debug"
+	modeRelease = "release"
+
+	runModeLocal       = "local"
+	runModeDevelopment = "dev"
+)
+
 type App struct {
 	Name            string `yaml:"name"`
 	Mode            string `yaml:"mode"`     // debug | release | test
 	RunMode         string `yaml:"run_mode"` // 运行环境；local | dev 时跳过登录认证，以初始管理员身份访问
-	Addr            string `yaml:"addr"`
+	Address         string `yaml:"addr"`
 	ShutdownTimeout int    `yaml:"shutdown_timeout"` // 秒
 }
 
 // SkipAuth 返回是否跳过登录认证（仅 local / dev 运行环境）。
 func (app App) SkipAuth() bool {
 	switch strings.ToLower(strings.TrimSpace(app.RunMode)) {
-	case "local", "dev":
+	case runModeLocal, runModeDevelopment:
 		return true
 	}
 	return false
@@ -44,7 +55,7 @@ type Log struct {
 	Level      string `yaml:"level"`
 	Format     string `yaml:"format"`
 	Output     string `yaml:"output"`
-	Dir        string `yaml:"dir"`
+	Directory  string `yaml:"dir"`
 	Filename   string `yaml:"filename"`
 	MaxSize    int    `yaml:"max_size"`
 	MaxBackups int    `yaml:"max_backups"`
@@ -67,23 +78,23 @@ type CORS struct {
 }
 
 type Postgres struct {
-	Enabled         bool   `yaml:"enabled"`
-	DSN             string `yaml:"dsn"`
-	MaxConns        int32  `yaml:"max_conns"`
-	MinConns        int32  `yaml:"min_conns"`
-	ConnectTimeout  int    `yaml:"connect_timeout"`
-	MaxConnLifetime int    `yaml:"max_conn_lifetime"`
-	MaxConnIdleTime int    `yaml:"max_conn_idle_time"`
+	Enabled               bool   `yaml:"enabled"`
+	DSN                   string `yaml:"dsn"`
+	MaxConnections        int32  `yaml:"max_conns"`
+	MinConnections        int32  `yaml:"min_conns"`
+	ConnectTimeout        int    `yaml:"connect_timeout"`
+	MaxConnectionLifetime int    `yaml:"max_conn_lifetime"`
+	MaxConnectionIdleTime int    `yaml:"max_conn_idle_time"`
 }
 
 type Redis struct {
-	Enabled        bool   `yaml:"enabled"`
-	URL            string `yaml:"url"`
-	PoolSize       int    `yaml:"pool_size"`
-	MinIdleConns   int    `yaml:"min_idle_conns"`
-	ConnectTimeout int    `yaml:"connect_timeout"` // 秒，包含启动 Ping
-	ReadTimeout    int    `yaml:"read_timeout"`    // 秒
-	WriteTimeout   int    `yaml:"write_timeout"`   // 秒
+	Enabled            bool   `yaml:"enabled"`
+	URL                string `yaml:"url"`
+	PoolSize           int    `yaml:"pool_size"`
+	MinIdleConnections int    `yaml:"min_idle_conns"`
+	ConnectTimeout     int    `yaml:"connect_timeout"` // 秒，包含启动 Ping
+	ReadTimeout        int    `yaml:"read_timeout"`    // 秒
+	WriteTimeout       int    `yaml:"write_timeout"`   // 秒
 }
 
 type Auth struct {
@@ -97,7 +108,7 @@ type Auth struct {
 
 func (auth Auth) Validate() error {
 	switch {
-	case auth.JWTSecret != "" && len(auth.JWTSecret) < 32:
+	case auth.JWTSecret != "" && len(auth.JWTSecret) < minimumJWTSecretBytes:
 		return errors.New("auth: jwt_secret must be at least 32 bytes")
 	case auth.TokenTTL <= 0 || auth.IdleTimeout <= 0 || auth.CaptchaTTL <= 0:
 		return errors.New("auth: token_ttl, idle_timeout and captcha_ttl must be positive")
@@ -123,26 +134,38 @@ type Config struct {
 // Default 返回默认配置。
 func Default() *Config {
 	return &Config{
-		Auth:  Auth{Issuer: "jade-kylin", TokenTTL: 900, IdleTimeout: 600, MaxSessions: 1, CaptchaTTL: 120},
-		Redis: Redis{URL: "redis://localhost:6379/0", PoolSize: 10, ConnectTimeout: 5, ReadTimeout: 3, WriteTimeout: 3},
+		Auth: Auth{
+			Issuer:      "jade-kylin",
+			TokenTTL:    900,
+			IdleTimeout: 600,
+			MaxSessions: 1,
+			CaptchaTTL:  120,
+		},
+		Redis: Redis{
+			URL:            "redis://localhost:6379/0",
+			PoolSize:       10,
+			ConnectTimeout: 5,
+			ReadTimeout:    3,
+			WriteTimeout:   3,
+		},
 		Postgres: Postgres{
-			MaxConns:        10,
-			MinConns:        0,
-			ConnectTimeout:  5,
-			MaxConnLifetime: 3600,
-			MaxConnIdleTime: 300,
+			MaxConnections:        10,
+			MinConnections:        0,
+			ConnectTimeout:        5,
+			MaxConnectionLifetime: 3600,
+			MaxConnectionIdleTime: 300,
 		},
 		App: App{
 			Name:            "jade-kylin",
-			Mode:            "debug",
-			Addr:            ":8080",
+			Mode:            modeDebug,
+			Address:         ":8080",
 			ShutdownTimeout: 10,
 		},
 		Log: Log{
 			Level:      "debug",
 			Format:     "console",
 			Output:     "stdout",
-			Dir:        "logs",
+			Directory:  "logs",
 			Filename:   "app.log",
 			MaxSize:    100,
 			MaxBackups: 7,
@@ -163,19 +186,21 @@ func Default() *Config {
 
 var current = Default()
 
+// Get 返回最近一次 Load 成功加载的配置；未加载时为默认配置。
 func Get() *Config {
 	return current
 }
 
+// Load 读取配置文件并应用环境变量覆盖。path 为空时依次使用 $KYLIN_CONFIG、configs/config.yaml。
 func Load(path string) (*Config, error) {
 	if path == "" {
-		path = os.Getenv(consts.EnvConfigPath)
+		path = os.Getenv(consts.EnvironmentConfigPath)
 	}
 	if path == "" {
 		path = consts.DefaultConfigPath
 	}
 
-	cfg := Default() // 每次加载都从默认配置开始
+	configuration := Default() // 每次加载都从默认配置开始
 	data, err := os.ReadFile(path)
 	switch {
 	case errors.Is(err, fs.ErrNotExist):
@@ -183,43 +208,43 @@ func Load(path string) (*Config, error) {
 	case err != nil:
 		return nil, fmt.Errorf("config: read %s: %w", path, err)
 	default:
-		if err := yaml.Unmarshal(data, cfg); err != nil {
+		if err := yaml.Unmarshal(data, configuration); err != nil {
 			return nil, fmt.Errorf("config: parse %s: %w", path, err)
 		}
 	}
 
-	if appRunMode, ok := os.LookupEnv(consts.GinMode); ok {
-		cfg.App.Mode = appRunMode
+	if ginMode, ok := os.LookupEnv(consts.GinMode); ok {
+		configuration.App.Mode = ginMode
 	}
 
 	if databaseDSN, ok := os.LookupEnv(consts.KylinDatabaseDsn); ok {
-		cfg.Postgres.DSN = databaseDSN
+		configuration.Postgres.DSN = databaseDSN
 	}
 
-	if redisUrl, ok := os.LookupEnv(consts.KylinRedisURL); ok {
-		cfg.Redis.URL = redisUrl
+	if redisURL, ok := os.LookupEnv(consts.KylinRedisURL); ok {
+		configuration.Redis.URL = redisURL
 	}
 
 	if runMode, ok := os.LookupEnv(consts.RunMode); ok {
-		cfg.App.RunMode = runMode
+		configuration.App.RunMode = runMode
 	}
-	if cfg.App.SkipAuth() && cfg.App.Mode == "release" {
+	if configuration.App.SkipAuth() && configuration.App.Mode == modeRelease {
 		// 防止把本地调试配置带到生产环境。
-		return nil, fmt.Errorf("config: run_mode %q skips authentication and must not be used with app.mode release", cfg.App.RunMode)
+		return nil, fmt.Errorf("config: run_mode %q skips authentication and must not be used with app.mode release", configuration.App.RunMode)
 	}
 
 	if jwtSecret, ok := os.LookupEnv(consts.KylinJWTSecret); ok {
-		cfg.Auth.JWTSecret = jwtSecret
+		configuration.Auth.JWTSecret = jwtSecret
 	}
-	if err := cfg.Auth.Validate(); err != nil {
+	if err := configuration.Auth.Validate(); err != nil {
 		return nil, fmt.Errorf("config: %w", err)
 	}
 
 	// 如果是 debug 模式，强制日志级别为 debug，避免在开发环境中漏掉日志。
-	if cfg.App.Mode == "debug" {
-		cfg.Log.Level = "debug"
+	if configuration.App.Mode == modeDebug {
+		configuration.Log.Level = "debug"
 	}
 
-	current = cfg
-	return cfg, nil
+	current = configuration
+	return configuration, nil
 }

@@ -20,20 +20,25 @@ import (
 	"jkylin.com/kylin/v2/pkg/response"
 )
 
-func Init(engine *gin.Engine, cfg *config.Config) {
-	globalMiddleware := global.NewGlobalMiddleware(cfg)
+// Initialize 注册全局中间件以及 404 / 405 处理。
+func Initialize(engine *gin.Engine, configuration *config.Config) {
+	globalMiddleware := global.NewMiddleware(configuration)
 
 	engine.Use(globalMiddleware.Trace(), globalMiddleware.AccessLog(), globalMiddleware.Recovery())
 
-	if cfg.CORS.Enabled {
+	if configuration.CORS.Enabled {
 		engine.Use(globalMiddleware.CORS())
 	}
-	if cfg.RateLimit.Enabled {
+	if configuration.RateLimit.Enabled {
 		engine.Use(globalMiddleware.RateLimit())
 	}
 
 	// 404, 405 处理
 	engine.HandleMethodNotAllowed = true // 启用 405 Method Not Allowed
-	engine.NoRoute(func(ctx *gin.Context) { response.Fail(ctx, errcode.RouteNotFound) })
-	engine.NoMethod(func(ctx *gin.Context) { response.Fail(ctx, errcode.MethodNotAllow) })
+	engine.NoRoute(func(ctx *gin.Context) {
+		response.Fail(ctx, errcode.RouteNotFound)
+	})
+	engine.NoMethod(func(ctx *gin.Context) {
+		response.Fail(ctx, errcode.MethodNotAllow)
+	})
 }

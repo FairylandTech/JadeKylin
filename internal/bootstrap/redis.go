@@ -22,31 +22,32 @@ import (
 	"jkylin.com/kylin/v2/internal/config"
 )
 
-func InitRedis(ctx context.Context, cfg config.Redis) (*redis.Client, error) {
-	if !cfg.Enabled {
+// InitializeRedis 创建 Redis 客户端并验证连通性；未启用时返回 nil。
+func InitializeRedis(ctx context.Context, configuration config.Redis) (*redis.Client, error) {
+	if !configuration.Enabled {
 		return nil, nil
 	}
-	if cfg.PoolSize <= 0 || cfg.MinIdleConns < 0 || cfg.MinIdleConns > cfg.PoolSize {
+	if configuration.PoolSize <= 0 || configuration.MinIdleConnections < 0 || configuration.MinIdleConnections > configuration.PoolSize {
 		return nil, errors.New("redis: require pool_size > 0 and 0 <= min_idle_conns <= pool_size")
 	}
-	if cfg.ConnectTimeout <= 0 || cfg.ReadTimeout <= 0 || cfg.WriteTimeout <= 0 {
+	if configuration.ConnectTimeout <= 0 || configuration.ReadTimeout <= 0 || configuration.WriteTimeout <= 0 {
 		return nil, errors.New("redis: timeouts must be positive")
 	}
-	opts, err := redis.ParseURL(cfg.URL)
+	options, err := redis.ParseURL(configuration.URL)
 	if err != nil {
 		// URL 解析错误可能包含凭据，不向日志返回原始错误。
 		return nil, errors.New("redis: invalid URL")
 	}
-	opts.PoolSize = cfg.PoolSize
-	opts.MinIdleConns = cfg.MinIdleConns
-	opts.DialTimeout = time.Duration(cfg.ConnectTimeout) * time.Second
-	opts.ReadTimeout = time.Duration(cfg.ReadTimeout) * time.Second
-	opts.WriteTimeout = time.Duration(cfg.WriteTimeout) * time.Second
-	opts.ContextTimeoutEnabled = true
-	client := redis.NewClient(opts)
-	pingCtx, cancel := context.WithTimeout(ctx, opts.DialTimeout)
+	options.PoolSize = configuration.PoolSize
+	options.MinIdleConns = configuration.MinIdleConnections
+	options.DialTimeout = time.Duration(configuration.ConnectTimeout) * time.Second
+	options.ReadTimeout = time.Duration(configuration.ReadTimeout) * time.Second
+	options.WriteTimeout = time.Duration(configuration.WriteTimeout) * time.Second
+	options.ContextTimeoutEnabled = true
+	client := redis.NewClient(options)
+	pingContext, cancel := context.WithTimeout(ctx, options.DialTimeout)
 	defer cancel()
-	if err := client.Ping(pingCtx).Err(); err != nil {
+	if err := client.Ping(pingContext).Err(); err != nil {
 		_ = client.Close()
 		return nil, fmt.Errorf("redis: ping: %w", err)
 	}

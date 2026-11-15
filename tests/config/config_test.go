@@ -22,52 +22,56 @@ import (
 
 func TestLoadPostgres(t *testing.T) {
 	previous := *config.Get()
-	t.Cleanup(func() { *config.Get() = previous })
+	t.Cleanup(func() {
+		*config.Get() = previous
+	})
 	path := filepath.Join(t.TempDir(), "config.yaml")
 	if err := os.WriteFile(path, []byte("postgres:\n  enabled: true\n  dsn: postgres://localhost/from-file\n  max_conns: 20\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("KYLIN_DATABASE_DSN", "postgres://localhost/from-env")
-	cfg, err := config.Load(path)
+	configuration, err := config.Load(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !cfg.Postgres.Enabled || cfg.Postgres.DSN != "postgres://localhost/from-env" || cfg.Postgres.MaxConns != 20 || cfg.Postgres.ConnectTimeout != 5 {
-		t.Fatalf("unexpected postgres config: %+v", cfg.Postgres)
+	if !configuration.Postgres.Enabled || configuration.Postgres.DSN != "postgres://localhost/from-env" || configuration.Postgres.MaxConnections != 20 || configuration.Postgres.ConnectTimeout != 5 {
+		t.Fatalf("unexpected postgres config: %+v", configuration.Postgres)
 	}
-	cfg, err = config.Load(filepath.Join(t.TempDir(), "missing.yaml"))
+	configuration, err = config.Load(filepath.Join(t.TempDir(), "missing.yaml"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.Postgres.Enabled || cfg.Postgres.MaxConns != 10 {
-		t.Fatalf("previous config leaked into defaults: %+v", cfg.Postgres)
+	if configuration.Postgres.Enabled || configuration.Postgres.MaxConnections != 10 {
+		t.Fatalf("previous config leaked into defaults: %+v", configuration.Postgres)
 	}
 	if err := os.Unsetenv("KYLIN_DATABASE_DSN"); err != nil {
 		t.Fatal(err)
 	}
-	cfg, err = config.Load(path)
+	configuration, err = config.Load(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.Postgres.DSN != "postgres://localhost/from-file" {
+	if configuration.Postgres.DSN != "postgres://localhost/from-file" {
 		t.Fatal("PostgreSQL DSN was not loaded from the config file")
 	}
 }
 
 func TestLoadAuth(t *testing.T) {
 	previous := *config.Get()
-	t.Cleanup(func() { *config.Get() = previous })
-	dir := t.TempDir()
-	cfg, err := config.Load(filepath.Join(dir, "missing.yaml"))
+	t.Cleanup(func() {
+		*config.Get() = previous
+	})
+	directory := t.TempDir()
+	configuration, err := config.Load(filepath.Join(directory, "missing.yaml"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.Auth.TokenTTL != 900 || cfg.Auth.IdleTimeout != 600 || cfg.Auth.MaxSessions != 1 || cfg.Auth.CaptchaTTL != 120 || cfg.Auth.JWTSecret != "" {
-		t.Fatalf("unexpected default auth config: %+v", cfg.Auth)
+	if configuration.Auth.TokenTTL != 900 || configuration.Auth.IdleTimeout != 600 || configuration.Auth.MaxSessions != 1 || configuration.Auth.CaptchaTTL != 120 || configuration.Auth.JWTSecret != "" {
+		t.Fatalf("unexpected default auth config: %+v", configuration.Auth)
 	}
 	t.Setenv("KYLIN_JWT_SECRET", "0123456789abcdef0123456789abcdef")
-	if cfg, err = config.Load(filepath.Join(dir, "missing.yaml")); err != nil || cfg.Auth.JWTSecret != "0123456789abcdef0123456789abcdef" {
-		t.Fatalf("jwt secret from env: %+v, %v", cfg, err)
+	if configuration, err = config.Load(filepath.Join(directory, "missing.yaml")); err != nil || configuration.Auth.JWTSecret != "0123456789abcdef0123456789abcdef" {
+		t.Fatalf("jwt secret from env: %+v, %v", configuration, err)
 	}
 	for name, body := range map[string]string{
 		"short secret": "auth:\n  jwt_secret: short\n",
@@ -91,14 +95,16 @@ func TestLoadAuth(t *testing.T) {
 
 func TestRunModeSkipAuth(t *testing.T) {
 	previous := *config.Get()
-	t.Cleanup(func() { *config.Get() = previous })
+	t.Cleanup(func() {
+		*config.Get() = previous
+	})
 	missing := filepath.Join(t.TempDir(), "missing.yaml")
 	t.Setenv("GIN_MODE", "debug")
 	for runMode, skip := range map[string]bool{"local": true, "dev": true, " LOCAL ": true, "prod": false, "test": false, "": false} {
 		t.Setenv("RUN_MODE", runMode)
-		cfg, err := config.Load(missing)
-		if err != nil || cfg.App.SkipAuth() != skip {
-			t.Fatalf("RUN_MODE=%q: skip=%v err=%v", runMode, cfg != nil && cfg.App.SkipAuth(), err)
+		configuration, err := config.Load(missing)
+		if err != nil || configuration.App.SkipAuth() != skip {
+			t.Fatalf("RUN_MODE=%q: skip=%v err=%v", runMode, configuration != nil && configuration.App.SkipAuth(), err)
 		}
 	}
 	// 跳过认证不能与 release 同时使用。

@@ -27,33 +27,33 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/redis/go-redis/v9"
 	"jkylin.com/kylin/v2/internal/config"
-	"jkylin.com/kylin/v2/internal/contracts/requests"
-	authmw "jkylin.com/kylin/v2/internal/middleware/auth"
-	"jkylin.com/kylin/v2/internal/model"
-	"jkylin.com/kylin/v2/internal/repository"
-	"jkylin.com/kylin/v2/internal/service"
+	"jkylin.com/kylin/v2/internal/middleware/security"
+	"jkylin.com/kylin/v2/internal/module/auth"
+	"jkylin.com/kylin/v2/internal/pkg/identity"
 	"jkylin.com/kylin/v2/pkg/consts"
 	"jkylin.com/kylin/v2/pkg/errcode"
 )
 
 const secret = "0123456789abcdef0123456789abcdef"
 
-func setup(t *testing.T) (*miniredis.Miniredis, *repository.AuthStore, *service.AuthService, config.Auth) {
+func setup(t *testing.T) (*miniredis.Miniredis, *auth.Store, *auth.Service, config.Auth) {
 	t.Helper()
-	mr := miniredis.RunT(t)
-	client := redis.NewClient(&redis.Options{Addr: mr.Addr()})
-	t.Cleanup(func() { _ = client.Close() })
-	cfg := config.Default().Auth
-	cfg.JWTSecret = secret
-	store := repository.NewAuthStore(client)
-	return mr, store, service.NewAuthService(nil, store, cfg), cfg
+	miniRedis := miniredis.RunT(t)
+	client := redis.NewClient(&redis.Options{Addr: miniRedis.Addr()})
+	t.Cleanup(func() {
+		_ = client.Close()
+	})
+	configuration := config.Default().Auth
+	configuration.JWTSecret = secret
+	store := auth.NewStore(client)
+	return miniRedis, store, auth.NewService(nil, store, configuration), configuration
 }
 
-func sign(t *testing.T, key string, userID int64, sessionID string, issuedAt time.Time, ttl time.Duration) string {
+func sign(t *testing.T, key string, userID int64, sessionID string, issuedAt time.Time, timeToLive time.Duration) string {
 	t.Helper()
 	token, err := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
 		"iss": "jade-kylin", "sub": strconv.FormatInt(userID, 10), "user_id": userID, "jti": sessionID, "username": "alice",
-		"iat": issuedAt.Unix(), "exp": issuedAt.Add(ttl).Unix(),
+		"iat": issuedAt.Unix(), "exp": issuedAt.Add(timeToLive).Unix(),
 	}).SignedString([]byte(key))
 	if err != nil {
 		t.Fatal(err)
@@ -61,10 +61,10 @@ func sign(t *testing.T, key string, userID int64, sessionID string, issuedAt tim
 	return token
 }
 
-func createSession(t *testing.T, store *repository.AuthStore, userID int64, sessionID string, at time.Time, maxSessions int) []string {
+func createSession(t *testing.T, store *auth.Store, userID int64, sessionID string, loginAt time.Time, maxSessions int) []string {
 	t.Helper()
-	evicted, err := store.CreateSession(context.Background(), &repository.AuthSession{
-		SessionID: sessionID, UserID: userID, Username: "alice", Token: "token-" + sessionID, LoginAt: at,
+	evicted, err := store.CreateSession(context.Background(), &auth.Session{
+		SessionID: sessionID, UserID: userID, Username: "alice", Token: "token-" + sessionID, LoginAt: loginAt,
 	}, 10*time.Minute, maxSessions)
 	if err != nil {
 		t.Fatal(err)
@@ -81,7 +81,7 @@ func assertCode(t *testing.T, err error, want *errcode.Error) {
 }
 
 func TestSessionLimit(t *testing.T) {
-	mr, store, _, _ := setup(t)
+	miniRedis, store, _, _ := setup(t)
 	ctx := context.Background()
 	now := time.Now()
 
@@ -103,18 +103,18 @@ func TestSessionLimit(t *testing.T) {
 	if evicted := createSession(t, store, 2, "c", now.Add(2*time.Second), 2); len(evicted) != 1 || evicted[0] != "a" {
 		t.Fatalf("expected oldest session a to be evicted: %v", evicted)
 	}
-	for _, sid := range []string{"x", "y", "z"} {
-		if evicted := createSession(t, store, 3, sid, now, 0); len(evicted) != 0 {
+	for _, sessionID := range []string{"x", "y", "z"} {
+		if evicted := createSession(t, store, 3, sessionID, now, 0); len(evicted) != 0 {
 			t.Fatalf("unlimited sessions should not evict: %v", evicted)
 		}
 	}
-	if members, _ := mr.ZMembers("kylin:auth:{3}:sessions"); len(members) != 3 {
+	if members, _ := miniRedis.ZMembers("kylin:auth:{3}:sessions"); len(members) != 3 {
 		t.Fatalf("expected 3 sessions: %v", members)
 	}
 
 	// 已过期的会话不占用名额。
 	createSession(t, store, 4, "old", now, 1)
-	mr.FastForward(11 * time.Minute)
+	miniRedis.FastForward(11 * time.Minute)
 	if evicted := createSession(t, store, 4, "new", now, 1); len(evicted) != 0 {
 		t.Fatalf("expired session should be pruned, not evicted: %v", evicted)
 	}
@@ -122,46 +122,50 @@ func TestSessionLimit(t *testing.T) {
 	if err := store.DeleteUserSessions(ctx, 2); err != nil {
 		t.Fatal(err)
 	}
-	for _, sid := range []string{"b", "c"} {
-		if session, _ := store.GetSession(ctx, 2, sid); session != nil {
-			t.Fatalf("session %s should be revoked", sid)
+	for _, sessionID := range []string{"b", "c"} {
+		if session, _ := store.GetSession(ctx, 2, sessionID); session != nil {
+			t.Fatalf("session %s should be revoked", sessionID)
 		}
 	}
-	if mr.Exists("kylin:auth:{2}:sessions") {
+	if miniRedis.Exists("kylin:auth:{2}:sessions") {
 		t.Fatal("session index should be deleted")
 	}
 }
 
 func TestAuthenticateIdleTimeoutAndRenewal(t *testing.T) {
-	mr, store, authService, _ := setup(t)
+	miniRedis, store, authService, _ := setup(t)
 	ctx := context.Background()
 	start := time.Now().Truncate(time.Second)
 	clock := start
-	authService.SetClock(func() time.Time { return clock })
+	authService.SetClock(func() time.Time {
+		return clock
+	})
 	createSession(t, store, 7, "sid", start, 1)
 	token := sign(t, secret, 7, "sid", start, 15*time.Minute)
 
 	// 9 分钟后有请求：JWT 剩余 6 分钟 < 10 分钟空闲窗口 → 续签；会话 TTL 重置为 10 分钟。
-	mr.FastForward(9 * time.Minute)
+	miniRedis.FastForward(9 * time.Minute)
 	clock = start.Add(9 * time.Minute)
 	principal, renewed, err := authService.Authenticate(ctx, token)
 	if err != nil || principal.UserID != 7 || principal.SessionID != "sid" || renewed == "" {
 		t.Fatalf("authenticate: %+v, %q, %v", principal, renewed, err)
 	}
-	if ttl := mr.TTL("kylin:auth:{7}:session:sid"); ttl != 10*time.Minute {
-		t.Fatalf("session idle TTL should be refreshed: %v", ttl)
+	if timeToLive := miniRedis.TTL("kylin:auth:{7}:session:sid"); timeToLive != 10*time.Minute {
+		t.Fatalf("session idle TTL should be refreshed: %v", timeToLive)
 	}
 	if stored, _ := store.GetSession(ctx, 7, "sid"); stored.Token != renewed {
 		t.Fatal("renewed JWT should be stored in Redis")
 	}
 	var claims jwt.RegisteredClaims
-	if _, err := jwt.ParseWithClaims(renewed, &claims, func(*jwt.Token) (any, error) { return []byte(secret), nil }); err != nil ||
+	if _, err := jwt.ParseWithClaims(renewed, &claims, func(*jwt.Token) (any, error) {
+		return []byte(secret), nil
+	}); err != nil ||
 		claims.ID != "sid" || !claims.ExpiresAt.Equal(clock.Add(15*time.Minute)) {
 		t.Fatalf("renewed token: %+v, %v", claims, err)
 	}
 
 	// 刚续签的 token：剩余 15 分钟 ≥ 10 分钟，不再续签。
-	mr.FastForward(time.Minute)
+	miniRedis.FastForward(time.Minute)
 	clock = clock.Add(time.Minute)
 	if _, again, err := authService.Authenticate(ctx, renewed); err != nil || again != "" {
 		t.Fatalf("should not renew fresh token: %q, %v", again, err)
@@ -173,7 +177,7 @@ func TestAuthenticateIdleTimeoutAndRenewal(t *testing.T) {
 	assertCode(t, err, errcode.Unauthorized)
 
 	// 10 分钟没有任何请求 → 会话过期，即便 JWT 本身尚未过期。
-	mr.FastForward(10 * time.Minute)
+	miniRedis.FastForward(10 * time.Minute)
 	clock = start.Add(20 * time.Minute)
 	_, _, err = authService.Authenticate(ctx, renewed)
 	if err == nil || !strings.Contains(err.Error(), "session") {
@@ -214,56 +218,58 @@ func TestAuthenticateRejectsBadTokens(t *testing.T) {
 func TestJWTMiddleware(t *testing.T) {
 	_, store, authService, _ := setup(t)
 	start := time.Now().Truncate(time.Second)
-	authService.SetClock(func() time.Time { return start.Add(6 * time.Minute) })
+	authService.SetClock(func() time.Time {
+		return start.Add(6 * time.Minute)
+	})
 	createSession(t, store, 9, "sid", start, 1)
 	token := sign(t, secret, 9, "sid", start, 15*time.Minute)
 
 	engine := gin.New()
-	engine.GET("/private", authmw.Authentication(authService), func(ctx *gin.Context) {
-		userID, ok := authmw.UserID(ctx)
+	engine.GET("/private", security.Authentication(authService), func(ctx *gin.Context) {
+		userID, ok := identity.UserID(ctx)
 		if !ok || userID != 9 || ctx.GetInt64(consts.UserIDKey) != 9 {
 			t.Errorf("user id not stored in context: %d %v", userID, ok)
 		}
-		ctx.String(http.StatusOK, authmw.Principal(ctx).Username)
+		ctx.String(http.StatusOK, identity.Current(ctx).Username)
 	})
 	call := func(header string) *httptest.ResponseRecorder {
-		req := httptest.NewRequest(http.MethodGet, "/private", nil)
-		req.Header.Set("Authorization", header)
-		res := httptest.NewRecorder()
-		engine.ServeHTTP(res, req)
-		return res
+		httpRequest := httptest.NewRequest(http.MethodGet, "/private", nil)
+		httpRequest.Header.Set("Authorization", header)
+		recorder := httptest.NewRecorder()
+		engine.ServeHTTP(recorder, httpRequest)
+		return recorder
 	}
 	for _, header := range []string{"", "Bearer ", "Basic " + token, "Bearer bad"} {
-		if res := call(header); res.Code != http.StatusUnauthorized || res.Header().Get("WWW-Authenticate") == "" {
-			t.Fatalf("header %q: status=%d", header, res.Code)
+		if recorder := call(header); recorder.Code != http.StatusUnauthorized || recorder.Header().Get("WWW-Authenticate") == "" {
+			t.Fatalf("header %q: status=%d", header, recorder.Code)
 		}
 	}
-	res := call("Bearer " + token)
-	if res.Code != http.StatusOK || res.Body.String() != "alice" || res.Header().Get(consts.AccessTokenHeader) == "" {
-		t.Fatalf("authorized request: %d %s %v", res.Code, res.Body.String(), res.Header())
+	recorder := call("Bearer " + token)
+	if recorder.Code != http.StatusOK || recorder.Body.String() != "alice" || recorder.Header().Get(consts.AccessTokenHeader) == "" {
+		t.Fatalf("authorized request: %d %s %v", recorder.Code, recorder.Body.String(), recorder.Header())
 	}
-	if err := authService.Logout(context.Background(), &model.Principal{UserID: 9, SessionID: "sid"}); err != nil {
+	if err := authService.Logout(context.Background(), &identity.Principal{UserID: 9, SessionID: "sid"}); err != nil {
 		t.Fatal(err)
 	}
-	if res := call("Bearer " + token); res.Code != http.StatusUnauthorized {
-		t.Fatalf("token should be rejected after logout: %d", res.Code)
+	if recorder := call("Bearer " + token); recorder.Code != http.StatusUnauthorized {
+		t.Fatalf("token should be rejected after logout: %d", recorder.Code)
 	}
 }
 
 func TestCaptcha(t *testing.T) {
-	mr, store, authService, cfg := setup(t)
+	miniRedis, store, authService, configuration := setup(t)
 	ctx := context.Background()
 	result, err := authService.Captcha(ctx)
-	if err != nil || result.CaptchaID == "" || result.ExpiresIn != cfg.CaptchaTTL {
+	if err != nil || result.CaptchaID == "" || result.ExpiresIn != configuration.CaptchaTTL {
 		t.Fatalf("captcha: %+v, %v", result, err)
 	}
 	key := "kylin:auth:captcha:" + result.CaptchaID
-	code, err := mr.Get(key)
+	code, err := miniRedis.Get(key)
 	if err != nil || code != result.Code || len(code) != 4 || strings.Trim(code, "0123456789") != "" {
 		t.Fatalf("stored captcha code %q: %v", code, err)
 	}
-	if ttl := mr.TTL(key); ttl != time.Duration(cfg.CaptchaTTL)*time.Second {
-		t.Fatalf("captcha TTL: %v", ttl)
+	if timeToLive := miniRedis.TTL(key); timeToLive != time.Duration(configuration.CaptchaTTL)*time.Second {
+		t.Fatalf("captcha TTL: %v", timeToLive)
 	}
 
 	// 验证码错误：返回 400，且验证码被消费，不能用正确的码重试。
@@ -272,15 +278,15 @@ func TestCaptcha(t *testing.T) {
 		wrong = "1111"
 	}
 	login := func(captchaCode string) error {
-		_, err := authService.Login(ctx, &requests.LoginRequest{Username: "alice", Password: "pw", CaptchaID: result.CaptchaID, CaptchaCode: captchaCode}, "", "")
+		_, err := authService.Login(ctx, &auth.LoginRequest{Username: "alice", Password: "pw", CaptchaID: result.CaptchaID, CaptchaCode: captchaCode}, "", "")
 		return err
 	}
-	assertCode(t, login(wrong), errcode.InvalidParams)
-	assertCode(t, login(code), errcode.InvalidParams)
+	assertCode(t, login(wrong), errcode.InvalidParameters)
+	assertCode(t, login(code), errcode.InvalidParameters)
 
 	// 过期验证码同样无效。
 	other, _ := authService.Captcha(ctx)
-	mr.FastForward(time.Duration(cfg.CaptchaTTL+1) * time.Second)
+	miniRedis.FastForward(time.Duration(configuration.CaptchaTTL+1) * time.Second)
 	if got, err := store.TakeCaptcha(ctx, other.CaptchaID); err != nil || got != "" {
 		t.Fatalf("expired captcha should be gone: %q, %v", got, err)
 	}
@@ -292,9 +298,9 @@ type fakeAuthorizer struct {
 	err           error
 }
 
-func (f *fakeAuthorizer) Authorize(_ context.Context, userID int64, method, path string) (bool, bool, error) {
-	f.method, f.path = method, path
-	return f.mapped, f.allow, f.err
+func (authorizer *fakeAuthorizer) Authorize(_ context.Context, userID int64, method, path string) (bool, bool, error) {
+	authorizer.method, authorizer.path = method, path
+	return authorizer.mapped, authorizer.allow, authorizer.err
 }
 
 func TestAuthorizationMiddleware(t *testing.T) {
@@ -305,20 +311,22 @@ func TestAuthorizationMiddleware(t *testing.T) {
 
 	authorizer := &fakeAuthorizer{}
 	engine := gin.New()
-	protected := engine.Group("", authmw.Authentication(authService), authmw.Authorization(authorizer))
-	protected.DELETE("/users/:id", func(ctx *gin.Context) { ctx.Status(http.StatusNoContent) })
+	protected := engine.Group("", security.Authentication(authService), security.Authorization(authorizer))
+	protected.DELETE("/users/:id", func(ctx *gin.Context) {
+		ctx.Status(http.StatusNoContent)
+	})
 	call := func(header string) int {
-		req := httptest.NewRequest(http.MethodDelete, "/users/42", nil)
-		req.Header.Set("Authorization", header)
-		res := httptest.NewRecorder()
-		engine.ServeHTTP(res, req)
-		return res.Code
+		httpRequest := httptest.NewRequest(http.MethodDelete, "/users/42", nil)
+		httpRequest.Header.Set("Authorization", header)
+		recorder := httptest.NewRecorder()
+		engine.ServeHTTP(recorder, httpRequest)
+		return recorder.Code
 	}
 
 	if code := call(""); code != http.StatusUnauthorized {
 		t.Fatalf("unauthenticated: %d", code)
 	}
-	for _, tc := range []struct {
+	for _, testCase := range []struct {
 		name          string
 		mapped, allow bool
 		err           error
@@ -329,10 +337,10 @@ func TestAuthorizationMiddleware(t *testing.T) {
 		{name: "allowed", mapped: true, allow: true, want: http.StatusNoContent},
 		{name: "store error", err: errors.New("db down"), want: http.StatusInternalServerError},
 	} {
-		t.Run(tc.name, func(t *testing.T) {
-			*authorizer = fakeAuthorizer{mapped: tc.mapped, allow: tc.allow, err: tc.err}
-			if code := call(token); code != tc.want {
-				t.Fatalf("status=%d want=%d", code, tc.want)
+		t.Run(testCase.name, func(t *testing.T) {
+			*authorizer = fakeAuthorizer{mapped: testCase.mapped, allow: testCase.allow, err: testCase.err}
+			if code := call(token); code != testCase.want {
+				t.Fatalf("status=%d want=%d", code, testCase.want)
 			}
 			// 鉴权使用路由模式而不是实际路径。
 			if authorizer.method != http.MethodDelete || authorizer.path != "/users/:id" {
@@ -350,42 +358,42 @@ func TestLocalAuthentication(t *testing.T) {
 
 	var resolveErr error
 	resolved := 0
-	resolve := func(context.Context) (*model.Principal, error) {
+	resolve := func(context.Context) (*identity.Principal, error) {
 		resolved++
 		if resolveErr != nil {
 			return nil, resolveErr
 		}
-		return &model.Principal{UserID: 1, Username: "admin", SessionID: service.LocalSessionID}, nil
+		return &identity.Principal{UserID: 1, Username: "admin", SessionID: auth.LocalSessionID}, nil
 	}
 	engine := gin.New()
-	engine.GET("/private", authmw.LocalAuthentication(authService, resolve), func(ctx *gin.Context) {
-		userID, _ := authmw.UserID(ctx)
+	engine.GET("/private", security.LocalAuthentication(authService, resolve), func(ctx *gin.Context) {
+		userID, _ := identity.UserID(ctx)
 		ctx.String(http.StatusOK, strconv.FormatInt(userID, 10)+":"+strconv.FormatInt(ctx.GetInt64(consts.UserIDKey), 10))
 	})
 	call := func(header string) *httptest.ResponseRecorder {
-		req := httptest.NewRequest(http.MethodGet, "/private", nil)
+		httpRequest := httptest.NewRequest(http.MethodGet, "/private", nil)
 		if header != "" {
-			req.Header.Set("Authorization", header)
+			httpRequest.Header.Set("Authorization", header)
 		}
-		res := httptest.NewRecorder()
-		engine.ServeHTTP(res, req)
-		return res
+		recorder := httptest.NewRecorder()
+		engine.ServeHTTP(recorder, httpRequest)
+		return recorder
 	}
 
 	// 不带 Authorization：跳过认证，以默认用户（admin）身份访问。
-	if res := call(""); res.Code != http.StatusOK || res.Body.String() != "1:1" {
-		t.Fatalf("local auth: %d %s", res.Code, res.Body.String())
+	if recorder := call(""); recorder.Code != http.StatusOK || recorder.Body.String() != "1:1" {
+		t.Fatalf("local auth: %d %s", recorder.Code, recorder.Body.String())
 	}
 	// 带 token：仍按正常 JWT 认证，使用 token 中的用户。
-	if res := call(token); res.Code != http.StatusOK || res.Body.String() != "5:5" || resolved != 1 {
-		t.Fatalf("jwt auth in local mode: %d %s resolved=%d", res.Code, res.Body.String(), resolved)
+	if recorder := call(token); recorder.Code != http.StatusOK || recorder.Body.String() != "5:5" || resolved != 1 {
+		t.Fatalf("jwt auth in local mode: %d %s resolved=%d", recorder.Code, recorder.Body.String(), resolved)
 	}
 	// 带无效 token 不会回退为管理员。
-	if res := call("Bearer bad"); res.Code != http.StatusUnauthorized {
-		t.Fatalf("invalid token should be rejected: %d", res.Code)
+	if recorder := call("Bearer bad"); recorder.Code != http.StatusUnauthorized {
+		t.Fatalf("invalid token should be rejected: %d", recorder.Code)
 	}
 	resolveErr = errcode.Unauthorized.WithMessage("local auth user not found")
-	if res := call(""); res.Code != http.StatusUnauthorized {
-		t.Fatalf("resolver error: %d", res.Code)
+	if recorder := call(""); recorder.Code != http.StatusUnauthorized {
+		t.Fatalf("resolver error: %d", recorder.Code)
 	}
 }

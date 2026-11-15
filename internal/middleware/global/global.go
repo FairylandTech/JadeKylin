@@ -18,12 +18,12 @@ import (
 )
 
 type Middleware struct {
-	cfg *config.Config
+	configuration *config.Config
 }
 
-func NewGlobalMiddleware(cfg *config.Config) *Middleware {
-	if cfg == nil {
-		cfg = config.Default()
+func NewMiddleware(configuration *config.Config) *Middleware {
+	if configuration == nil {
+		configuration = config.Default()
 	}
-	return &Middleware{cfg: cfg}
+	return &Middleware{configuration: configuration}
 }
