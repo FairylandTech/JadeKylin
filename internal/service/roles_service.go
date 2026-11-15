@@ -29,6 +29,20 @@ import (
 type RoleService struct {
 	RoleRepository       *repository.RoleRepository
 	PermissionRepository *repository.PermissionRepository
+	// AuthzCache 为 nil 时（未启用登录）跳过鉴权缓存失效。
+	AuthzCache AuthzInvalidator
+}
+
+// invalidateAuthz 角色变更可能影响任意用户，删除所有用户的权限缓存。
+// 新建角色也需要失效：被删除的角色 code 可能仍留在用户的 roles 中，重建同 code 角色会让这些用户获得权限。
+func (service *RoleService) invalidateAuthz(ctx context.Context) error {
+	if service.AuthzCache == nil {
+		return nil
+	}
+	if err := service.AuthzCache.InvalidateAllUsers(ctx); err != nil {
+		return authzSyncError(err)
+	}
+	return nil
 }
 
 func NewRoleService(roleRepository *repository.RoleRepository, permissionRepository *repository.PermissionRepository) *RoleService {
@@ -56,6 +70,9 @@ func (service *RoleService) Create(ctx context.Context, requestBody *requests.Cr
 	}
 	if err := service.RoleRepository.Create(ctx, record); err != nil {
 		return nil, translateRoleError(err)
+	}
+	if err := service.invalidateAuthz(ctx); err != nil {
+		return nil, err
 	}
 	return record, nil
 }
@@ -97,11 +114,20 @@ func (service *RoleService) Update(ctx context.Context, id int64, requestBody *r
 		return nil, errcode.InvalidParams.WithMessage("at least one roles field is required")
 	}
 	record, err := service.RoleRepository.Update(ctx, id, changes)
-	return record, translateRoleError(err)
+	if err != nil {
+		return nil, translateRoleError(err)
+	}
+	if err := service.invalidateAuthz(ctx); err != nil {
+		return nil, err
+	}
+	return record, nil
 }
 
 func (service *RoleService) Delete(ctx context.Context, id int64) error {
-	return translateRoleError(service.RoleRepository.Delete(ctx, id))
+	if err := service.RoleRepository.Delete(ctx, id); err != nil {
+		return translateRoleError(err)
+	}
+	return service.invalidateAuthz(ctx)
 }
 
 // normalizePermissions 去除首尾空白、去重，并确认每个权限都已存在且启用。

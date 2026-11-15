@@ -51,6 +51,16 @@ func normalizeCodes(ctx context.Context, field string, codes []string, existing 
 	return normalized, nil
 }
 
+// AuthzInvalidator 失效 Redis 中的鉴权缓存（*repository.AuthzCache 实现）。
+type AuthzInvalidator interface {
+	InvalidateUser(ctx context.Context, userID int64) error
+	InvalidateAllUsers(ctx context.Context) error
+}
+
+func authzSyncError(err error) error {
+	return errcode.Internal.WithMessage("saved but failed to refresh permission cache").Wrap(err)
+}
+
 func requireText(field, value string) (string, error) {
 	value = strings.TrimSpace(value)
 	if value == "" {

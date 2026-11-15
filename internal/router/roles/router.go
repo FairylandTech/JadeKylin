@@ -14,14 +14,12 @@ package roles
 
 import (
 	"github.com/gin-gonic/gin"
-	"gorm.io/gorm"
 	"jkylin.com/kylin/v2/internal/handler"
-	"jkylin.com/kylin/v2/internal/repository"
 	"jkylin.com/kylin/v2/internal/service"
 )
 
-func Router(group *gin.RouterGroup, db *gorm.DB) {
-	roleHandler := handler.NewRoleHandler(service.NewRoleService(repository.NewRoleRepository(db), repository.NewPermissionRepository(db)))
+func Router(group *gin.RouterGroup, roleService *service.RoleService) {
+	roleHandler := handler.NewRoleHandler(roleService)
 	roles := group.Group("/roles")
 	roles.POST("", roleHandler.Create)
 	roles.GET("", roleHandler.List)

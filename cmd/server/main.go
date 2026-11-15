@@ -21,16 +21,20 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/joho/godotenv"
 	"go.uber.org/zap"
+	"gorm.io/gorm"
 	"jkylin.com/kylin/v2/internal/bootstrap"
 	"jkylin.com/kylin/v2/internal/config"
 	"jkylin.com/kylin/v2/internal/middleware"
+	"jkylin.com/kylin/v2/internal/repository"
 	"jkylin.com/kylin/v2/internal/router"
+	"jkylin.com/kylin/v2/internal/service"
 	"jkylin.com/kylin/v2/pkg/consts"
 	"jkylin.com/kylin/v2/pkg/logger"
 )
@@ -87,7 +91,27 @@ func run(configPath string) error {
 	engine.ContextWithFallback = true
 
 	middleware.Init(engine, cfg)
-	router.Init(engine, postgresql, os.Getenv(consts.KylinUserAdminToken))
+	deps := router.Dependencies{
+		DB: postgresql, Redis: redisClient, Auth: cfg.Auth,
+		SkipAuth: cfg.App.SkipAuth(), LocalUsername: os.Getenv(consts.KylinAdminUsername),
+	}
+	if deps.SkipAuth {
+		logger.Warn("Authentication is SKIPPED: requests without Authorization act as the admin user",
+			zap.String("run_mode", cfg.App.RunMode))
+	}
+	router.Init(engine, deps)
+	if !deps.Enabled() {
+		logger.Warn("Login and management APIs disabled: requires PostgreSQL, Redis and KYLIN_JWT_SECRET")
+	} else {
+		if err := ensureAdmin(ctx, postgresql); err != nil {
+			return fmt.Errorf("ensure initial admin: %w", err)
+		}
+		// 启动时把接口放行权限同步到 Redis，覆盖 migration 或手工修改数据库带来的变更。
+		if err := router.NewServices(deps).ApiPermissions.SyncCache(ctx); err != nil {
+			return fmt.Errorf("sync api permissions to Redis: %w", err)
+		}
+		logger.Info("API permissions synced to Redis")
+	}
 
 	server := &http.Server{
 		Addr:              cfg.App.Addr,
@@ -139,6 +163,23 @@ func run(configPath string) error {
 		return fmt.Errorf("serve HTTP: %w", err)
 	}
 	logger.Info("HTTP server stopped")
+	return nil
+}
+
+// ensureAdmin 按 KYLIN_ADMIN_USERNAME / KYLIN_ADMIN_PASSWORD 创建初始管理员；用户已存在时不修改。
+func ensureAdmin(ctx context.Context, db *gorm.DB) error {
+	username, password := os.Getenv(consts.KylinAdminUsername), os.Getenv(consts.KylinAdminPassword)
+	if strings.TrimSpace(username) == "" || password == "" {
+		return nil
+	}
+	userService := service.NewUserService(repository.NewUserRepository(db), repository.NewRoleRepository(db))
+	created, err := userService.EnsureAdmin(ctx, username, password)
+	if err != nil {
+		return err
+	}
+	if created {
+		logger.Info("Initial admin user created", zap.String("username", username))
+	}
 	return nil
 }
 

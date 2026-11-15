@@ -53,3 +53,64 @@ func TestLoadPostgres(t *testing.T) {
 		t.Fatal("PostgreSQL DSN was not loaded from the config file")
 	}
 }
+
+func TestLoadAuth(t *testing.T) {
+	previous := *config.Get()
+	t.Cleanup(func() { *config.Get() = previous })
+	dir := t.TempDir()
+	cfg, err := config.Load(filepath.Join(dir, "missing.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Auth.TokenTTL != 900 || cfg.Auth.IdleTimeout != 600 || cfg.Auth.MaxSessions != 1 || cfg.Auth.CaptchaTTL != 120 || cfg.Auth.JWTSecret != "" {
+		t.Fatalf("unexpected default auth config: %+v", cfg.Auth)
+	}
+	t.Setenv("KYLIN_JWT_SECRET", "0123456789abcdef0123456789abcdef")
+	if cfg, err = config.Load(filepath.Join(dir, "missing.yaml")); err != nil || cfg.Auth.JWTSecret != "0123456789abcdef0123456789abcdef" {
+		t.Fatalf("jwt secret from env: %+v, %v", cfg, err)
+	}
+	for name, body := range map[string]string{
+		"short secret": "auth:\n  jwt_secret: short\n",
+		"idle >= ttl":  "auth:\n  token_ttl: 600\n  idle_timeout: 600\n",
+		"negative max": "auth:\n  max_sessions: -1\n",
+		"zero captcha": "auth:\n  captcha_ttl: 0\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Setenv("KYLIN_JWT_SECRET", "")
+			_ = os.Unsetenv("KYLIN_JWT_SECRET")
+			path := filepath.Join(t.TempDir(), "config.yaml")
+			if err := os.WriteFile(path, []byte(body), 0600); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := config.Load(path); err == nil {
+				t.Fatalf("expected validation error for %q", body)
+			}
+		})
+	}
+}
+
+func TestRunModeSkipAuth(t *testing.T) {
+	previous := *config.Get()
+	t.Cleanup(func() { *config.Get() = previous })
+	missing := filepath.Join(t.TempDir(), "missing.yaml")
+	t.Setenv("GIN_MODE", "debug")
+	for runMode, skip := range map[string]bool{"local": true, "dev": true, " LOCAL ": true, "prod": false, "test": false, "": false} {
+		t.Setenv("RUN_MODE", runMode)
+		cfg, err := config.Load(missing)
+		if err != nil || cfg.App.SkipAuth() != skip {
+			t.Fatalf("RUN_MODE=%q: skip=%v err=%v", runMode, cfg != nil && cfg.App.SkipAuth(), err)
+		}
+	}
+	// 跳过认证不能与 release 同时使用。
+	t.Setenv("GIN_MODE", "release")
+	for _, runMode := range []string{"local", "dev"} {
+		t.Setenv("RUN_MODE", runMode)
+		if _, err := config.Load(missing); err == nil {
+			t.Fatalf("RUN_MODE=%s with release mode should be rejected", runMode)
+		}
+	}
+	t.Setenv("RUN_MODE", "prod")
+	if _, err := config.Load(missing); err != nil {
+		t.Fatal(err)
+	}
+}

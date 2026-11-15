@@ -76,6 +76,29 @@ func (userRepository *UserRepository) Update(ctx context.Context, id int64, vers
 	return nil, support.ErrVersionConflict
 }
 
+// GetCredentials 按用户名读取启用用户（包含密码哈希），仅供登录校验使用。
+func (userRepository *UserRepository) GetCredentials(ctx context.Context, username string) (*model.User, error) {
+	return support.FirstRecord[model.User](support.EnabledRecords(ctx, userRepository.db).Where("username = ?", username))
+}
+
+// PermissionCodes 返回启用且状态正常的用户通过启用角色拥有的全部权限 code（去重）。
+func (userRepository *UserRepository) PermissionCodes(ctx context.Context, userID int64) ([]string, error) {
+	codes := make([]string, 0)
+	err := userRepository.db.WithContext(ctx).Raw(`SELECT DISTINCT permission
+FROM kylin_v2_users u
+JOIN kylin_v2_roles r ON r.code = ANY (u.roles) AND r.enabled = 'Y'
+CROSS JOIN LATERAL unnest(r.permissions) AS permission
+WHERE u.id = ? AND u.enabled = 'Y' AND u.status = 'Y'`, userID).Scan(&codes).Error
+	return codes, support.DBError(err)
+}
+
+// ExistsByUsername 判断是否存在启用的同名用户。
+func (userRepository *UserRepository) ExistsByUsername(ctx context.Context, username string) (bool, error) {
+	var count int64
+	err := support.EnabledRecords(ctx, userRepository.db).Model(&model.User{}).Where("username = ?", username).Limit(1).Count(&count).Error
+	return count > 0, support.DBError(err)
+}
+
 // GetPasswordHash 返回启用用户的密码哈希，仅供密码校验使用。
 func (userRepository *UserRepository) GetPasswordHash(ctx context.Context, id int64) (string, error) {
 	var hash string

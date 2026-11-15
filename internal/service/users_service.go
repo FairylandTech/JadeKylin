@@ -29,13 +29,44 @@ import (
 	"jkylin.com/kylin/v2/pkg/errcode"
 )
 
+// SessionRevoker 让用户所有登录会话下线。
+type SessionRevoker interface {
+	RevokeUser(ctx context.Context, userID int64) error
+}
+
 type UserService struct {
 	UserRepository *repository.UserRepository
 	RoleRepository *repository.RoleRepository
+	// SessionRevoker 为 nil 时（未启用登录）跳过会话下线。
+	SessionRevoker SessionRevoker
+	// AuthzCache 为 nil 时（未启用登录）跳过鉴权缓存失效。
+	AuthzCache AuthzInvalidator
+}
+
+// invalidateAuthz 用户角色、状态变更或删除后删除其权限缓存，下次请求从数据库重新加载。
+func (service *UserService) invalidateAuthz(ctx context.Context, userID int64) error {
+	if service.AuthzCache == nil {
+		return nil
+	}
+	if err := service.AuthzCache.InvalidateUser(ctx, userID); err != nil {
+		return authzSyncError(err)
+	}
+	return nil
 }
 
 func NewUserService(userRepository *repository.UserRepository, roleRepository *repository.RoleRepository) *UserService {
 	return &UserService{UserRepository: userRepository, RoleRepository: roleRepository}
+}
+
+// revokeSessions 在密码变更、禁用、删除后让用户所有设备下线。
+func (service *UserService) revokeSessions(ctx context.Context, userID int64) error {
+	if service.SessionRevoker == nil {
+		return nil
+	}
+	if err := service.SessionRevoker.RevokeUser(ctx, userID); err != nil {
+		return errcode.Internal.WithMessage("user updated but failed to revoke login sessions").Wrap(err)
+	}
+	return nil
 }
 
 func (service *UserService) Create(ctx context.Context, requestBody *requests.CreateRequest) (*model.User, error) {
@@ -106,7 +137,20 @@ func (service *UserService) Update(ctx context.Context, id int64, requestBody *r
 		return nil, errcode.InvalidParams.WithMessage("at least one users field is required")
 	}
 	record, err := service.UserRepository.Update(ctx, id, requestBody.Version, changes)
-	return record, translateUserError(err)
+	if err != nil {
+		return nil, translateUserError(err)
+	}
+	if requestBody.Roles != nil || requestBody.Status != nil {
+		if err := service.invalidateAuthz(ctx, id); err != nil {
+			return nil, err
+		}
+	}
+	if requestBody.Status != nil && *requestBody.Status != "Y" {
+		if err := service.revokeSessions(ctx, id); err != nil {
+			return nil, err
+		}
+	}
+	return record, nil
 }
 
 // ChangePassword 校验旧密码后写入新密码。
@@ -131,7 +175,22 @@ func (service *UserService) ChangePassword(ctx context.Context, id int64, reques
 	} else if err != nil {
 		return translateUserError(err)
 	}
-	return nil
+	return service.revokeSessions(ctx, id)
+}
+
+// EnsureAdmin 在启用的同名用户不存在时创建初始管理员（角色 admin），已存在则不做任何修改。返回是否新建。
+func (service *UserService) EnsureAdmin(ctx context.Context, username, password string) (bool, error) {
+	username = strings.TrimSpace(username)
+	exists, err := service.UserRepository.ExistsByUsername(ctx, username)
+	if err != nil || exists {
+		return false, err
+	}
+	roles := valueobject.RoleList{"admin"}
+	_, err = service.Create(ctx, &requests.CreateRequest{Username: username, Password: password, Nickname: "Administrator", Roles: &roles})
+	if err != nil && errcode.From(err).Code == errcode.Conflict.Code {
+		return false, nil // 并发启动的另一个实例已经创建
+	}
+	return err == nil, err
 }
 
 // ResetPassword 生成随机新密码并返回明文，数据库只保存哈希。
@@ -147,11 +206,20 @@ func (service *UserService) ResetPassword(ctx context.Context, id int64) (*reque
 	if err := service.UserRepository.UpdatePassword(ctx, id, nil, hash); err != nil {
 		return nil, translateUserError(err)
 	}
+	if err := service.revokeSessions(ctx, id); err != nil {
+		return nil, err
+	}
 	return &requests.ResetPasswordResponse{ID: id, NewPassword: password}, nil
 }
 
 func (service *UserService) Delete(ctx context.Context, id int64) error {
-	return translateUserError(service.UserRepository.Delete(ctx, id))
+	if err := service.UserRepository.Delete(ctx, id); err != nil {
+		return translateUserError(err)
+	}
+	if err := service.invalidateAuthz(ctx, id); err != nil {
+		return err
+	}
+	return service.revokeSessions(ctx, id)
 }
 
 // normalizeRoles 去除首尾空白、去重，并确认每个角色都已存在且启用。

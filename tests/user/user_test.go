@@ -24,42 +24,57 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/alicebob/miniredis/v2"
 	"github.com/gin-gonic/gin"
+	"github.com/redis/go-redis/v9"
 	"golang.org/x/crypto/bcrypt"
 	"gorm.io/gorm"
 	"jkylin.com/kylin/v2/internal/bootstrap"
 	"jkylin.com/kylin/v2/internal/config"
 	"jkylin.com/kylin/v2/internal/contracts/requests"
 	"jkylin.com/kylin/v2/internal/model"
+	"jkylin.com/kylin/v2/internal/repository"
 	"jkylin.com/kylin/v2/internal/router"
+	"jkylin.com/kylin/v2/internal/router/roles"
+	"jkylin.com/kylin/v2/internal/router/users"
+	"jkylin.com/kylin/v2/internal/service"
 )
 
 func TestUserRouteConfiguration(t *testing.T) {
 	db := new(gorm.DB)
+	mr := miniredis.RunT(t)
+	client := redis.NewClient(&redis.Options{Addr: mr.Addr()})
+	t.Cleanup(func() { _ = client.Close() })
+	authCfg := config.Default().Auth
+	authCfg.JWTSecret = testJWTSecret
+	noSecret := authCfg
+	noSecret.JWTSecret = ""
 	for _, tc := range []struct {
 		name   string
-		db     *gorm.DB
-		token  string
+		deps   router.Dependencies
 		header string
 		status int
 	}{
-		{name: "database disabled", token: "test-token", status: http.StatusNotFound},
-		{name: "token absent", db: db, status: http.StatusNotFound},
-		{name: "unauthenticated", db: db, token: "test-token", status: http.StatusUnauthorized},
-		{name: "wrong token", db: db, token: "test-token", header: "Bearer wrong", status: http.StatusUnauthorized},
+		{name: "database disabled", deps: router.Dependencies{Redis: client, Auth: authCfg}, status: http.StatusNotFound},
+		{name: "redis disabled", deps: router.Dependencies{DB: db, Auth: authCfg}, status: http.StatusNotFound},
+		{name: "jwt secret absent", deps: router.Dependencies{DB: db, Redis: client, Auth: noSecret}, status: http.StatusNotFound},
+		{name: "unauthenticated", deps: router.Dependencies{DB: db, Redis: client, Auth: authCfg}, status: http.StatusUnauthorized},
+		{name: "invalid jwt", deps: router.Dependencies{DB: db, Redis: client, Auth: authCfg}, header: "Bearer wrong", status: http.StatusUnauthorized},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			engine := gin.New()
-			router.Init(engine, tc.db, tc.token)
-			for _, path := range []string{"/users", "/roles", "/permissions"} {
+			router.Init(engine, tc.deps)
+			for _, path := range []string{"/users", "/roles", "/permissions", "/api-permissions", "/auth/me"} {
 				assertStatus(t, request(engine, http.MethodGet, path, tc.header, ""), tc.status)
 			}
 			assertStatus(t, request(engine, http.MethodGet, "/healthz", "", ""), http.StatusOK)
 		})
 	}
 
+	// 参数校验发生在访问数据库之前：直接挂载路由（跳过认证）验证请求校验。
 	engine := gin.New()
-	router.Init(engine, db, "test-token")
+	users.Router(engine.Group(""), service.NewUserService(repository.NewUserRepository(db), repository.NewRoleRepository(db)))
+	roles.Router(engine.Group(""), service.NewRoleService(repository.NewRoleRepository(db), repository.NewPermissionRepository(db)))
 	for _, input := range []struct{ method, path, body string }{
 		{http.MethodPost, "/users", `{"username":"   ","password":"test-password"}`},
 		{http.MethodPost, "/users", `{"username":"test","password":"` + strings.Repeat("密", 25) + `"}`},
@@ -83,7 +98,7 @@ func TestUserRouteConfiguration(t *testing.T) {
 		{http.MethodGet, "/roles/0", ""},
 		{http.MethodGet, "/roles?page=9223372036854775807&size=100", ""},
 	} {
-		assertStatus(t, request(engine, input.method, input.path, "Bearer test-token", input.body), http.StatusBadRequest)
+		assertStatus(t, request(engine, input.method, input.path, "", input.body), http.StatusBadRequest)
 	}
 }
 
@@ -132,6 +147,12 @@ func TestUserPostgresIntegration(t *testing.T) {
 			return err
 		}
 		verifyCRUD(t, conn, string(migration))
+		t.Run("local auth", func(t *testing.T) {
+			verifyLocalAuth(t, conn)
+		})
+		t.Run("login and logout", func(t *testing.T) {
+			verifyLoginFlow(t, conn)
+		})
 		t.Run("role permission API", func(t *testing.T) {
 			verifyRolePermissionAPI(t, conn)
 		})
@@ -146,12 +167,11 @@ func TestUserPostgresIntegration(t *testing.T) {
 
 func verifyCRUD(t *testing.T, db *gorm.DB, migration string) {
 	t.Helper()
-	engine := gin.New()
-	const token = "test-token"
-	router.Init(engine, db, token)
+	server := newTestServer(t, db)
+	token := server.admin(t)
 	call := func(method, path, body string, want int) *httptest.ResponseRecorder {
 		t.Helper()
-		res := request(engine, method, path, "Bearer "+token, body)
+		res := request(server.engine, method, path, token, body)
 		assertStatus(t, res, want)
 		if strings.Contains(res.Body.String(), `"password":`) {
 			t.Fatalf("response contains password field: %s", res.Body.String())
@@ -187,7 +207,7 @@ func verifyCRUD(t *testing.T, db *gorm.DB, migration string) {
 		Pages int          `json:"pages"`
 		Data  []model.User `json:"data"`
 	}](t, call(http.MethodGet, "/users", "", http.StatusOK))
-	if defaultPage.Page != 1 || defaultPage.Size != 10 || defaultPage.Total != 2 || defaultPage.Pages != 1 || len(defaultPage.Data) != 2 {
+	if defaultPage.Page != 1 || defaultPage.Size != 10 || defaultPage.Total != 3 || defaultPage.Pages != 1 || len(defaultPage.Data) != 3 {
 		t.Fatalf("unexpected default page: %+v", defaultPage)
 	}
 	for _, keyword := range []string{"%25", "_"} {
@@ -264,7 +284,7 @@ func verifyCRUD(t *testing.T, db *gorm.DB, migration string) {
 		path  string
 		total int64
 	}{
-		{path: "/users", total: 1},
+		{path: "/users", total: 2}, // Bob + 初始管理员 root
 		{path: "/users?keyword=alice", total: 0},
 		{path: "/users?keyword=example", total: 0},
 	} {
@@ -272,7 +292,7 @@ func verifyCRUD(t *testing.T, db *gorm.DB, migration string) {
 			Data  []model.User `json:"data"`
 			Total int64        `json:"total"`
 		}](t, call(http.MethodGet, tc.path, "", http.StatusOK))
-		if list.Total != tc.total || len(list.Data) != int(tc.total) || (tc.total == 1 && list.Data[0].ID != second.ID) {
+		if list.Total != tc.total || len(list.Data) != int(tc.total) || (tc.total == 2 && list.Data[0].ID != second.ID) {
 			t.Fatalf("unexpected page after soft delete for %s: %+v", tc.path, list)
 		}
 	}
@@ -319,12 +339,11 @@ func decodeData[T any](t *testing.T, res *httptest.ResponseRecorder) T {
 
 func verifyRolePermissionAPI(t *testing.T, db *gorm.DB) {
 	t.Helper()
-	engine := gin.New()
-	const token = "test-token"
-	router.Init(engine, db, token)
+	server := newTestServer(t, db)
+	token := server.admin(t)
 	call := func(method, path, body string, want int) *httptest.ResponseRecorder {
 		t.Helper()
-		res := request(engine, method, path, "Bearer "+token, body)
+		res := request(server.engine, method, path, token, body)
 		assertStatus(t, res, want)
 		return res
 	}

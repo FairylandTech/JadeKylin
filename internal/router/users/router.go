@@ -14,14 +14,13 @@ package users
 
 import (
 	"github.com/gin-gonic/gin"
-	"gorm.io/gorm"
 	"jkylin.com/kylin/v2/internal/handler"
-	"jkylin.com/kylin/v2/internal/repository"
 	"jkylin.com/kylin/v2/internal/service"
 )
 
-func Router(group *gin.RouterGroup, db *gorm.DB) {
-	userHandler := handler.NewUserHandler(service.NewUserService(repository.NewUserRepository(db), repository.NewRoleRepository(db)))
+// Router 注册用户管理接口。
+func Router(group *gin.RouterGroup, userService *service.UserService) {
+	userHandler := handler.NewUserHandler(userService)
 	users := group.Group("/users")
 	users.POST("", userHandler.Create)
 	users.GET("", userHandler.List)

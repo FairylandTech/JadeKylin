@@ -1,6 +1,7 @@
 app:
   name: jade-kylin
   mode: debug            # debug | release | test
+  run_mode: ""           # local | dev 时跳过登录认证并以初始管理员身份访问（可用 RUN_MODE 覆盖）；不能与 release 同时使用
   addr: ":8080"
   shutdown_timeout: 10   # 优雅退出等待秒数
 
@@ -45,3 +46,11 @@ redis:
   connect_timeout: 5 # 秒，包含启动 Ping
   read_timeout: 3    # 秒
   write_timeout: 3   # 秒
+
+auth:
+  jwt_secret: ""     # 推荐通过 KYLIN_JWT_SECRET 设置，至少 32 字节；为空时不注册登录接口
+  issuer: jade-kylin
+  token_ttl: 900     # 秒，JWT 有效期（15 分钟）
+  idle_timeout: 600  # 秒，10 分钟无请求会话失效；有请求即续期
+  max_sessions: 1    # 每个用户同时在线设备数，0 不限制；超出时踢掉最早登录的设备
+  captcha_ttl: 120   # 秒，验证码有效期

@@ -53,7 +53,7 @@ func (m *Middleware) CORS() gin.HandlerFunc {
 			return
 		}
 
-		h.Set("Access-Control-Expose-Headers", consts.TraceHeader)
+		h.Set("Access-Control-Expose-Headers", consts.TraceHeader+","+consts.AccessTokenHeader)
 
 		if ctx.Request.Method == http.MethodOptions {
 			h.Set("Access-Control-Allow-Methods", "GET,POST,PUT,PATCH,DELETE,OPTIONS")
